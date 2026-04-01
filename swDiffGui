@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+# Copyright 2026 Seamware
+#
+# swDiffGui - GUI diff viewer with REGEX and SORT awareness
+#
+# Shows a side-by-side diff of reference vs actual output.
+# Color coding:
+#   White  - exact match
+#   Green  - REGEX match (pattern matched, even though text differs)
+#   Blue   - lines within a SORT block that matched after sorting
+#   Red    - real mismatch
+#   Grey   - SORT markers (#SORT_START, #SORT_END) - informational only
+#
+
+import sys
+import os
+import re
+import signal
+import tkinter as tk
+from tkinter import ttk, font
+from argparse import ArgumentParser
+
+# Import swDiff from the same directory
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+
+# We inline the core logic to avoid import issues with extensionless files
+# but reuse the same algorithms as swDiff
+
+
+def escape_non_regex(s):
+    for ch in ['[', ']', '{', '}', '?', '(', ')', '.', '+', '*', '^', '$', '|']:
+        s = s.replace(ch, '\\' + ch)
+    return s
+
+
+def line_matches(ref_line, input_line):
+    m = re.match(r'(.*)REGEX\((.*)\)(.*)', ref_line)
+    if m:
+        regex = escape_non_regex(m.group(1)) + m.group(2) + escape_non_regex(m.group(3))
+        return bool(re.match(regex, input_line)), True
+    return ref_line == input_line, False
+
+
+def read_lines(filepath):
+    with open(filepath, 'r') as f:
+        return [line.rstrip() for line in f.readlines()]
+
+
+def parse_sort_blocks(ref_lines):
+    blocks = []
+    start = None
+    for i, line in enumerate(ref_lines):
+        if line == '#SORT_START':
+            start = i
+        elif line == '#SORT_END':
+            if start is not None:
+                blocks.append((start, i))
+                start = None
+    return blocks
+
+
+# ---------------------------------------------------------------------------
+#
+# Build a display model: list of rows, each row is:
+#   (ref_line, input_line, status, ref_line_no, input_line_no)
+#
+# status is one of: 'exact', 'regex', 'sorted_exact', 'sorted_regex',
+#                    'mismatch', 'sort_marker', 'missing', 'extra'
+#
+def build_display_model(ref_file, input_file):
+    ref_lines = read_lines(ref_file)
+    input_lines = read_lines(input_file)
+
+    sort_blocks = parse_sort_blocks(ref_lines)
+
+    # Build set of ref line indices that are sort markers
+    marker_indices = set()
+    for (s, e) in sort_blocks:
+        marker_indices.add(s)
+        marker_indices.add(e)
+
+    # Build set of ref line ranges that are inside sort blocks
+    sorted_ranges = []
+    for (s, e) in sort_blocks:
+        sorted_ranges.append((s + 1, e - 1))  # exclusive of markers
+
+    def in_sort_block(ref_idx):
+        for (a, b) in sorted_ranges:
+            if a <= ref_idx <= b:
+                return True
+        return False
+
+    rows = []
+    ref_idx = 0
+    inp_idx = 0
+    marker_offset = 0  # how many marker lines we've passed in ref
+
+    while ref_idx < len(ref_lines):
+        ref_line = ref_lines[ref_idx]
+
+        # Sort marker line?
+        if ref_idx in marker_indices:
+            rows.append((ref_line, '', 'sort_marker', ref_idx + 1, None))
+            ref_idx += 1
+            marker_offset += 1
+            continue
+
+        # Are we inside a sort block?
+        if in_sort_block(ref_idx):
+            # Find the full range of this sort block
+            for (a, b) in sorted_ranges:
+                if a <= ref_idx <= b:
+                    block_ref = ref_lines[a:b + 1]
+                    block_len = b - a + 1
+                    inp_start = a - marker_offset
+                    block_inp = input_lines[inp_start:inp_start + block_len]
+
+                    sorted_ref = sorted(block_ref)
+                    sorted_inp = sorted(block_inp)
+
+                    for j in range(max(len(sorted_ref), len(sorted_inp))):
+                        rline = sorted_ref[j] if j < len(sorted_ref) else ''
+                        iline = sorted_inp[j] if j < len(sorted_inp) else ''
+                        matches, is_regex = line_matches(rline, iline)
+                        if matches:
+                            kind = 'sorted_regex' if is_regex else 'sorted_exact'
+                        else:
+                            kind = 'mismatch'
+                        rows.append((rline, iline, kind, a + 1 + j, inp_start + 1 + j))
+
+                    ref_idx = b + 1
+                    inp_idx = inp_start + block_len
+                    break
+            continue
+
+        # Normal line
+        if inp_idx < len(input_lines):
+            inp_line = input_lines[inp_idx]
+            matches, is_regex = line_matches(ref_line, inp_line)
+            if matches:
+                kind = 'regex' if is_regex else 'exact'
+            else:
+                kind = 'mismatch'
+            rows.append((ref_line, inp_line, kind, ref_idx + 1, inp_idx + 1))
+            inp_idx += 1
+        else:
+            rows.append((ref_line, '', 'missing', ref_idx + 1, None))
+
+        ref_idx += 1
+
+    # Extra input lines
+    while inp_idx < len(input_lines):
+        rows.append(('', input_lines[inp_idx], 'extra', None, inp_idx + 1))
+        inp_idx += 1
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
+#
+# Color scheme
+#
+COLORS = {
+    'exact':        {'bg': '#ffffff', 'fg': '#000000'},
+    'regex':        {'bg': '#ffffff', 'fg': '#000000'},
+    'sorted_exact': {'bg': '#ffffff', 'fg': '#000000'},
+    'sorted_regex': {'bg': '#ffffff', 'fg': '#000000'},
+    'mismatch':     {'bg': '#f8d7da', 'fg': '#721c24'},       # red - real diff
+    'sort_marker':  {'bg': '#ffffff', 'fg': '#000000'},
+    'missing':      {'bg': '#f8d7da', 'fg': '#721c24'},       # red
+    'extra':        {'bg': '#f8d7da', 'fg': '#721c24'},       # red
+}
+
+
+class SwDiffGui:
+    def __init__(self, root, ref_file, input_file):
+        self.root = root
+        self.root.title(f"swDiffGui - {os.path.basename(ref_file)} vs {os.path.basename(input_file)}")
+
+        # Build model
+        self.rows = build_display_model(ref_file, input_file)
+        self.error_count = sum(1 for r in self.rows if r[2] in ('mismatch', 'missing', 'extra'))
+        self.regex_count = sum(1 for r in self.rows if r[2] in ('regex', 'sorted_regex'))
+        self.sort_count = sum(1 for r in self.rows if r[2] in ('sorted_exact', 'sorted_regex'))
+
+        self._build_ui(ref_file, input_file)
+        self._populate()
+
+    def _build_ui(self, ref_file, input_file):
+        # Top bar: summary
+        top = ttk.Frame(self.root)
+        top.pack(fill=tk.X, padx=5, pady=5)
+
+        status_text = f"Lines: {len(self.rows)}"
+        if self.error_count:
+            status_text += f"  |  Mismatches: {self.error_count}"
+        else:
+            status_text += "  |  All lines match"
+        if self.regex_count:
+            status_text += f"  |  REGEX matches: {self.regex_count}"
+        if self.sort_count:
+            status_text += f"  |  Sorted matches: {self.sort_count}"
+
+        ttk.Label(top, text=status_text).pack(side=tk.LEFT)
+
+        # Navigation buttons
+        nav = ttk.Frame(top)
+        nav.pack(side=tk.RIGHT)
+        self.diff_indices = [i for i, r in enumerate(self.rows) if r[2] in ('mismatch', 'missing', 'extra')]
+        self.current_diff = -1
+
+        ttk.Button(nav, text="Prev Diff", command=self._prev_diff).pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav, text="Next Diff", command=self._next_diff).pack(side=tk.LEFT, padx=2)
+
+        # Legend
+        legend_frame = ttk.Frame(self.root)
+        legend_frame.pack(fill=tk.X, padx=5)
+        c = COLORS['mismatch']
+        lbl = tk.Label(legend_frame, text=" Mismatch ", bg=c['bg'], fg=c['fg'],
+                       relief=tk.RIDGE, padx=4, pady=1)
+        lbl.pack(side=tk.LEFT, padx=2)
+
+        # Main content: two synced text widgets
+        paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Reference side
+        left_frame = ttk.LabelFrame(paned, text=f"Reference: {ref_file}")
+        self.ref_text = tk.Text(left_frame, wrap=tk.NONE, state=tk.DISABLED, width=80)
+        ref_scroll_y = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=self.ref_text.yview)
+        self.ref_text.configure(yscrollcommand=ref_scroll_y.set)
+        self.ref_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        ref_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        paned.add(left_frame, weight=1)
+
+        # Input side
+        right_frame = ttk.LabelFrame(paned, text=f"Input: {input_file}")
+        self.inp_text = tk.Text(right_frame, wrap=tk.NONE, state=tk.DISABLED, width=80)
+        inp_scroll_y = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=self.inp_text.yview)
+        self.inp_text.configure(yscrollcommand=inp_scroll_y.set)
+        self.inp_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        inp_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        paned.add(right_frame, weight=1)
+
+        # Horizontal scrollbar (shared)
+        h_scroll = ttk.Scrollbar(self.root, orient=tk.HORIZONTAL,
+                                 command=self._h_scroll)
+        h_scroll.pack(fill=tk.X, padx=5)
+        self.ref_text.configure(xscrollcommand=h_scroll.set)
+        self.inp_text.configure(xscrollcommand=h_scroll.set)
+
+        # Sync vertical scrolling
+        self.ref_text.configure(yscrollcommand=self._sync_scroll_ref)
+        self.inp_text.configure(yscrollcommand=self._sync_scroll_inp)
+
+        # Configure monospace font
+        mono = font.Font(family='monospace', size=10)
+        self.ref_text.configure(font=mono)
+        self.inp_text.configure(font=mono)
+
+        # Configure tags for colors
+        for status, colors in COLORS.items():
+            self.ref_text.tag_configure(status, background=colors['bg'], foreground=colors['fg'])
+            self.inp_text.tag_configure(status, background=colors['bg'], foreground=colors['fg'])
+
+        # Keyboard bindings
+        self.root.bind('n', lambda e: self._next_diff())
+        self.root.bind('p', lambda e: self._prev_diff())
+        self.root.bind('q', lambda e: self.root.quit())
+
+    def _h_scroll(self, *args):
+        self.ref_text.xview(*args)
+        self.inp_text.xview(*args)
+
+    def _sync_scroll_ref(self, *args):
+        self.inp_text.yview_moveto(args[0])
+        # Update scrollbar too
+        return args
+
+    def _sync_scroll_inp(self, *args):
+        self.ref_text.yview_moveto(args[0])
+        return args
+
+    def _populate(self):
+        self.ref_text.configure(state=tk.NORMAL)
+        self.inp_text.configure(state=tk.NORMAL)
+
+        for i, (ref_line, inp_line, status, ref_no, inp_no) in enumerate(self.rows):
+            ref_prefix = f"{ref_no:4d} " if ref_no else "     "
+            inp_prefix = f"{inp_no:4d} " if inp_no else "     "
+
+            self.ref_text.insert(tk.END, ref_prefix + ref_line + "\n", status)
+            self.inp_text.insert(tk.END, inp_prefix + inp_line + "\n", status)
+
+        self.ref_text.configure(state=tk.DISABLED)
+        self.inp_text.configure(state=tk.DISABLED)
+
+    def _next_diff(self):
+        if not self.diff_indices:
+            return
+        self.current_diff = min(self.current_diff + 1, len(self.diff_indices) - 1)
+        self._scroll_to_diff()
+
+    def _prev_diff(self):
+        if not self.diff_indices:
+            return
+        self.current_diff = max(self.current_diff - 1, 0)
+        self._scroll_to_diff()
+
+    def _scroll_to_diff(self):
+        idx = self.diff_indices[self.current_diff]
+        line = idx + 1
+        self.ref_text.see(f"{line}.0")
+        self.inp_text.see(f"{line}.0")
+
+
+def main():
+    parser = ArgumentParser(description='swDiffGui - GUI diff viewer with REGEX and SORT awareness')
+    parser.add_argument('-r', '--reference', required=True,
+                        help='Reference file (expected output)')
+    parser.add_argument('-i', '--input', required=True,
+                        help='Input file (actual output)')
+    args = parser.parse_args()
+
+    if not os.path.exists(args.reference):
+        print(f"Error: Reference file '{args.reference}' does not exist", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.exists(args.input):
+        print(f"Error: Input file '{args.input}' does not exist", file=sys.stderr)
+        sys.exit(1)
+
+    root = tk.Tk()
+    root.geometry("1400x800")
+    signal.signal(signal.SIGINT, lambda *a: root.destroy())
+    # Wake up the event loop every 200ms so signals get processed promptly
+    def poll():
+        root.after(200, poll)
+    root.after(200, poll)
+    SwDiffGui(root, args.reference, args.input)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()

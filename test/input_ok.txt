@@ -1,0 +1,15 @@
+HTTP/1.1 200 OK
+Content-Length: 285
+Date: Mon, 30 Mar 2026 12:00:00 GMT
+Content-Type: application/json
+
+{
+  "id": "urn:ngsi-ld:Entity:E1",
+  "type": "T",
+  "status": "value": "active", "type": "Property"
+}
+cherry
+date
+apple
+banana
+Done

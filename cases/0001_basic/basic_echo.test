@@ -1,0 +1,28 @@
+--NAME--
+Basic echo test
+
+--INIT--
+# Nothing to set up
+
+--RUN--
+echo "Hello World"
+echo "Date: $(date)"
+echo "Items:"
+echo "cherry"
+echo "apple"
+echo "banana"
+echo "Done"
+
+--EXPECT--
+Hello World
+Date: REGEX(.*)
+Items:
+#SORT_START
+apple
+banana
+cherry
+#SORT_END
+Done
+
+--TEARDOWN--
+# Nothing to clean up

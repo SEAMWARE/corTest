@@ -1,0 +1,15 @@
+--NAME--
+Basic test that should fail
+
+--INIT--
+
+--RUN--
+echo "Hello"
+echo "Wrong output"
+
+--EXPECT--
+Hello
+Expected output
+
+--TEARDOWN--
+

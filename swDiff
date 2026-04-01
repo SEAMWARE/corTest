@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# Copyright 2026 Seamware
+#
+# swDiff - Diff tool with REGEX and SORT support
+#
+# Strategy:
+#   1. Run normal 'diff' first. If files are identical, we're done.
+#   2. If diff finds differences, do a second round:
+#      a. Process #SORT_START / #SORT_END blocks: sort lines within those blocks
+#      b. Compare line-by-line with REGEX() support in reference lines
+#
+# Reference file markers:
+#   REGEX(pattern)  - embedded in a line, that portion is matched as a regex
+#   #SORT_START     - begin a block of lines that should be sorted before comparison
+#   #SORT_END       - end a sorted block
+#
+
+import sys
+import os
+import subprocess
+import re
+from argparse import ArgumentParser
+
+
+def escape_non_regex(s):
+    """Escape regex-sensitive characters in the non-REGEX parts of a line."""
+    for ch in ['[', ']', '{', '}', '?', '(', ')', '.', '+', '*', '^', '$', '|']:
+        s = s.replace(ch, '\\' + ch)
+    return s
+
+
+def line_matches(ref_line, input_line):
+    """Check if input_line matches ref_line, which may contain REGEX() markers.
+    Returns (matches: bool, is_regex: bool)."""
+    m = re.match(r'(.*)REGEX\((.*)\)(.*)', ref_line)
+    if m:
+        regex = escape_non_regex(m.group(1)) + m.group(2) + escape_non_regex(m.group(3))
+        return bool(re.match(regex, input_line)), True
+    return ref_line == input_line, False
+
+
+def parse_sort_blocks(ref_lines):
+    """Find all #SORT_START / #SORT_END pairs in reference lines.
+    Returns list of (start_idx, end_idx) tuples (indices into ref_lines, exclusive of markers)."""
+    blocks = []
+    start = None
+    for i, line in enumerate(ref_lines):
+        if line == '#SORT_START':
+            start = i
+        elif line == '#SORT_END':
+            if start is not None:
+                blocks.append((start, i))
+                start = None
+    return blocks
+
+
+def apply_sort_blocks(ref_lines, input_lines, sort_blocks):
+    """Return new ref/input line lists with sorted blocks and markers removed.
+    Also returns a mapping from new line indices to original input line indices."""
+    if not sort_blocks:
+        return ref_lines, input_lines
+
+    new_ref = []
+    new_input = []
+
+    # Calculate the offset: each sort block has 2 marker lines in ref but none in input
+    # So input block positions are shifted
+    marker_offset = 0
+    prev_ref_end = 0
+
+    for (sstart, send) in sort_blocks:
+        # Non-sorted region before this block
+        ref_chunk = ref_lines[prev_ref_end:sstart]
+        inp_start = prev_ref_end - marker_offset
+        inp_chunk = input_lines[inp_start:inp_start + len(ref_chunk)]
+        new_ref.extend(ref_chunk)
+        new_input.extend(inp_chunk)
+
+        # Account for #SORT_START marker
+        marker_offset += 1
+
+        # Sorted region (between markers, exclusive)
+        ref_block = sorted(ref_lines[sstart + 1:send])
+        block_len = send - sstart - 1
+        inp_block_start = (sstart + 1) - marker_offset
+        inp_block = sorted(input_lines[inp_block_start:inp_block_start + block_len])
+        new_ref.extend(ref_block)
+        new_input.extend(inp_block)
+
+        # Account for #SORT_END marker
+        marker_offset += 1
+        prev_ref_end = send + 1
+
+    # Remaining lines after last sort block
+    ref_chunk = ref_lines[prev_ref_end:]
+    inp_start = prev_ref_end - marker_offset
+    inp_chunk = input_lines[inp_start:]
+    new_ref.extend(ref_chunk)
+    new_input.extend(inp_chunk)
+
+    return new_ref, new_input
+
+
+class DiffResult:
+    """Holds the result of a comparison."""
+    def __init__(self):
+        self.ok = True
+        self.errors = []       # list of (line_no, ref_line, input_line, kind)
+        self.matches = []      # list of (line_no, ref_line, input_line, kind)  kind: 'exact', 'regex', 'sorted'
+        self.line_count_error = None  # string if line counts differ
+
+    def add_error(self, line_no, ref_line, input_line, kind='mismatch'):
+        self.ok = False
+        self.errors.append((line_no, ref_line, input_line, kind))
+
+    def add_match(self, line_no, ref_line, input_line, kind='exact'):
+        self.matches.append((line_no, ref_line, input_line, kind))
+
+
+def diff_lines(ref_lines, input_lines):
+    """Compare ref_lines and input_lines with REGEX support.
+    Returns a DiffResult."""
+    result = DiffResult()
+
+    if len(ref_lines) != len(input_lines):
+        result.ok = False
+        result.line_count_error = (
+            f"Line count differs: reference={len(ref_lines)}, input={len(input_lines)}"
+        )
+
+    count = min(len(ref_lines), len(input_lines))
+    for i in range(count):
+        matches, is_regex = line_matches(ref_lines[i], input_lines[i])
+        if matches:
+            kind = 'regex' if is_regex else 'exact'
+            result.add_match(i + 1, ref_lines[i], input_lines[i], kind)
+        else:
+            result.add_error(i + 1, ref_lines[i], input_lines[i])
+
+    # Extra lines
+    if len(ref_lines) > len(input_lines):
+        for i in range(count, len(ref_lines)):
+            result.add_error(i + 1, ref_lines[i], '', 'missing_input')
+    elif len(input_lines) > len(ref_lines):
+        for i in range(count, len(input_lines)):
+            result.add_error(i + 1, '', input_lines[i], 'extra_input')
+
+    return result
+
+
+def read_lines(filepath):
+    """Read file, strip trailing whitespace from each line."""
+    with open(filepath, 'r') as f:
+        return [line.rstrip() for line in f.readlines()]
+
+
+def sw_diff(ref_file, input_file, verbose=False):
+    """Main diff logic.
+    Returns (DiffResult, had_sort_blocks: bool)."""
+
+    # Step 1: Quick check with normal diff
+    ret = subprocess.run(['diff', '-q', ref_file, input_file],
+                         capture_output=True, text=True)
+    if ret.returncode == 0:
+        # Files identical - no further work needed
+        result = DiffResult()
+        ref_lines = read_lines(ref_file)
+        for i, line in enumerate(ref_lines):
+            result.add_match(i + 1, line, line, 'exact')
+        return result, False
+
+    if verbose:
+        print("Normal diff found differences, running second round with REGEX/SORT support...")
+
+    # Step 2: Second round - REGEX + SORT
+    ref_lines = read_lines(ref_file)
+    input_lines = read_lines(input_file)
+
+    sort_blocks = parse_sort_blocks(ref_lines)
+    has_sort = len(sort_blocks) > 0
+
+    if has_sort:
+        ref_lines, input_lines = apply_sort_blocks(ref_lines, input_lines, sort_blocks)
+
+    return diff_lines(ref_lines, input_lines), has_sort
+
+
+def main():
+    parser = ArgumentParser(description='swDiff - Diff tool with REGEX and SORT support')
+    parser.add_argument('-r', '--reference', required=True,
+                        help='Reference file (expected output)')
+    parser.add_argument('-i', '--input', required=True,
+                        help='Input file (actual output)')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='Verbose output')
+    parser.add_argument('--json', action='store_true',
+                        help='Output results as JSON (for GUI consumption)')
+    args = parser.parse_args()
+
+    if not os.path.exists(args.reference):
+        print(f"Error: Reference file '{args.reference}' does not exist", file=sys.stderr)
+        sys.exit(2)
+    if not os.path.exists(args.input):
+        print(f"Error: Input file '{args.input}' does not exist", file=sys.stderr)
+        sys.exit(2)
+
+    result, had_sort = sw_diff(args.reference, args.input, args.verbose)
+
+    if args.json:
+        import json
+        output = {
+            'ok': result.ok,
+            'line_count_error': result.line_count_error,
+            'had_sort_blocks': had_sort,
+            'errors': [
+                {'line': ln, 'ref': ref, 'input': inp, 'kind': kind}
+                for ln, ref, inp, kind in result.errors
+            ],
+            'matches': [
+                {'line': ln, 'ref': ref, 'input': inp, 'kind': kind}
+                for ln, ref, inp, kind in result.matches
+            ],
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        if result.line_count_error:
+            print(result.line_count_error)
+        for ln, ref, inp, kind in result.errors:
+            print(f"Line {ln}: {kind}")
+            print(f"  ref:   {ref}")
+            print(f"  input: {inp}")
+        if result.ok:
+            print("OK")
+
+    sys.exit(0 if result.ok else 1)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,571 @@
+#!/bin/bash
+# Copyright 2026 Seamware
+#
+# swTest - Functional test harness
+#
+# Test file format (.test):
+#   --NAME--
+#   Human-readable test name
+#
+#   --INIT--
+#   Setup commands (run before test)
+#
+#   --RUN--
+#   Test execution (stdout captured and compared to --EXPECT--)
+#
+#   --EXPECT--
+#   Expected output (supports REGEX() and #SORT_START/#SORT_END)
+#
+#   --TEARDOWN--
+#   Cleanup commands (run after test)
+#
+
+# -----------------------------------------------------------------------------
+#
+# Find script home directory (where swTest lives)
+#
+dirname=$(dirname $0)
+if [ "$dirname" == "" ]; then
+  dirname="."
+fi
+cd $dirname
+SCRIPT_HOME=$(pwd)
+cd - > /dev/null 2>&1
+
+export SCRIPT_HOME
+
+# Repo root is the current working directory (swTest must be run from repo root)
+REPO_ROOT=$(pwd)
+export REPO_ROOT
+
+# Repo-specific test functions file
+# Default: test/funcTests/swTestFunctions.sh (relative to repo root)
+# Override: SW_TEST_FUNCTIONS env var
+SW_TEST_FUNCTIONS="${SW_TEST_FUNCTIONS:-${REPO_ROOT}/test/funcTests/swTestFunctions.sh}"
+export SW_TEST_FUNCTIONS
+
+
+# -----------------------------------------------------------------------------
+#
+# Logging
+#
+LOG_FILE=/tmp/swTest.log
+
+function logMsg()
+{
+  echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> $LOG_FILE
+}
+
+function vMsg()
+{
+  if [ "$verbose" == "on" ]; then
+    echo "$*"
+  fi
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# usage
+#
+function usage()
+{
+  sfile="Usage: $(basename $0)"
+  empty=$(echo $sfile | tr 'a-zA-Z/0-9.:' ' ')
+  echo "$sfile [-u (usage)]"
+  echo "$empty [-v (verbose)]"
+  echo "$empty [-g]                           (GUI diff on failure, using swDiffGui)"
+  echo "$empty [--filter <pattern>]           (default: *.test)"
+  echo "$empty [--match <grep-pattern>]       (filter test names)"
+  echo "$empty [--keep]                       (keep output files on success)"
+  echo "$empty [--dryrun]                     (list tests, don't run)"
+  echo "$empty [--stopOnError]                (stop on first failure)"
+  echo "$empty [--maxTries <N>]               (retry failing tests, default: 1)"
+  echo "$empty [--diffTool <path>]            (external diff tool on failure)"
+  echo "$empty [--noColor]                    (disable colored output)"
+  echo "$empty [--fromIx <N>]                 (start from test index N)"
+  echo "$empty [--toIx <N>]                   (stop at test index N)"
+  echo "$empty [<file.test> | <directory>]... (default: cases/)"
+
+  exit $1
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# Terminal colors
+#
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'  # No Color
+
+function colorPass()
+{
+  if [ "$noColor" == "on" ]; then echo "OK";
+  else echo -e "${GREEN}OK${NC}"; fi
+}
+
+function colorFail()
+{
+  if [ "$noColor" == "on" ]; then echo "FAIL: $1";
+  else echo -e "${RED}FAIL: $1${NC}"; fi
+}
+
+function colorSkip()
+{
+  if [ "$noColor" == "on" ]; then echo "SKIP";
+  else echo -e "${YELLOW}SKIP${NC}"; fi
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# extractSection - extract a section from a .test file
+#
+# $1: section name (e.g. "NAME", "INIT", "RUN", "EXPECT", "TEARDOWN")
+# $2: path to .test file
+#
+function extractSection()
+{
+  local section="$1"
+  local file="$2"
+
+  sed -n "/^--${section}--$/,/^--/p" "$file" | grep -v "^--"
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# fileCreation - extract all sections from a .test file
+#
+function fileCreation()
+{
+  local testFile="$1"
+  local dir=$(dirname "$testFile")
+  local base=$(basename "$testFile" .test)
+  local prefix="$dir/$base"
+
+  extractSection "NAME" "$testFile" > "$prefix.name"
+  NAME=$(cat "$prefix.name")
+
+  if [ ! -s "$prefix.name" ]; then
+    echo "Error: --NAME-- section missing or empty in $testFile"
+    return 2
+  fi
+
+  extractSection "INIT"     "$testFile" > "$prefix.init"
+  extractSection "RUN"      "$testFile" > "$prefix.run"
+  extractSection "EXPECT"   "$testFile" > "$prefix.expect"
+  extractSection "TEARDOWN" "$testFile" > "$prefix.teardown"
+
+  # RUN and EXPECT are mandatory
+  if [ ! -s "$prefix.run" ]; then
+    echo "Error: --RUN-- section missing or empty in $testFile"
+    return 4
+  fi
+
+  if [ ! -s "$prefix.expect" ]; then
+    echo "Error: --EXPECT-- section missing or empty in $testFile"
+    return 5
+  fi
+
+  # Make shell scripts executable
+  chmod 755 "$prefix.init"     2>/dev/null
+  chmod 755 "$prefix.run"      2>/dev/null
+  chmod 755 "$prefix.teardown" 2>/dev/null
+
+  return 0
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# fileCleanup - remove generated files for a test
+#
+function fileCleanup()
+{
+  local testFile="$1"
+  local dir=$(dirname "$testFile")
+  local base=$(basename "$testFile" .test)
+  local prefix="$dir/$base"
+
+  rm -f "$prefix.name"
+  rm -f "$prefix.init"
+  rm -f "$prefix.run"
+  rm -f "$prefix.expect"
+  rm -f "$prefix.teardown"
+  rm -f "$prefix.out"
+  rm -f "$prefix.diff"
+  rm -f "$prefix.init.stderr"
+  rm -f "$prefix.run.stderr"
+  rm -f "$prefix.teardown.stderr"
+  rm -f "$prefix.expect.sorted"
+  rm -f "$prefix.out.sorted"
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# runTest - run a single test
+#
+# Returns:
+#   0  - pass
+#   7  - RUN stderr not empty
+#   8  - RUN non-zero exit
+#   9  - output mismatch
+#   10 - INIT stderr not empty
+#   11 - INIT non-zero exit
+#   12 - TEARDOWN error
+#
+function runTest()
+{
+  local testFile="$1"
+  local tryNo="$2"
+  local dir=$(dirname "$testFile")
+  local base=$(basename "$testFile" .test)
+  local prefix="$dir/$base"
+
+  # --- File creation (extract sections) ---
+  fileCreation "$testFile"
+  local fRes=$?
+  if [ "$fRes" != 0 ]; then
+    return $fRes
+  fi
+
+  # --- Source helper functions into generated scripts ---
+  # Line 2: swTest's own helper functions (swCurl, swBrokerStart, etc.)
+  # Line 3: repo-specific functions (swBrokerTestInit.sh or equivalent)
+  local srcLine="source $SCRIPT_HOME/swTestFunctions.sh"
+  local repoSrcLine=""
+  if [ -f "$SW_TEST_FUNCTIONS" ]; then
+    repoSrcLine="source $SW_TEST_FUNCTIONS"
+  fi
+  for part in init run teardown; do
+    if [ -s "$prefix.$part" ]; then
+      head -1 "$prefix.$part" | grep -q '^#!' || sed -i '1i#!/bin/bash' "$prefix.$part"
+      # Insert source lines after the shebang
+      if [ -n "$repoSrcLine" ]; then
+        sed -i "2i$repoSrcLine" "$prefix.$part"
+      fi
+      sed -i "2i$srcLine" "$prefix.$part"
+    fi
+  done
+
+  # --- INIT ---
+  if [ -s "$prefix.init" ]; then
+    vMsg "  Running INIT ..."
+    logMsg "INIT: $testFile"
+
+    bash "$prefix.init" > /dev/null 2> "$prefix.init.stderr"
+    local initExit=$?
+
+    if [ -s "$prefix.init.stderr" ]; then
+      echo "  INIT produced stderr:"
+      cat "$prefix.init.stderr" | head -5
+      return 10
+    fi
+
+    if [ "$initExit" != 0 ]; then
+      echo "  INIT exited with code $initExit"
+      return 11
+    fi
+  fi
+
+  # --- RUN ---
+  vMsg "  Running RUN ..."
+  logMsg "RUN: $testFile"
+
+  bash "$prefix.run" > "$prefix.out" 2> "$prefix.run.stderr"
+  local runExit=$?
+
+  if [ -s "$prefix.run.stderr" ]; then
+    echo "  RUN produced stderr:"
+    cat "$prefix.run.stderr" | head -5
+    return 7
+  fi
+
+  if [ "$runExit" != 0 ]; then
+    echo "  RUN exited with code $runExit"
+    return 8
+  fi
+
+  # --- Compare output ---
+  vMsg "  Comparing output ..."
+
+  $SCRIPT_HOME/swDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
+  local diffExit=$?
+
+  if [ "$diffExit" != 0 ]; then
+    vMsg "  Output mismatch"
+    return 9
+  fi
+
+  # --- TEARDOWN ---
+  if [ -s "$prefix.teardown" ]; then
+    vMsg "  Running TEARDOWN ..."
+    logMsg "TEARDOWN: $testFile"
+
+    bash "$prefix.teardown" > /dev/null 2> "$prefix.teardown.stderr"
+    local teardownExit=$?
+
+    if [ "$teardownExit" != 0 ]; then
+      echo "  TEARDOWN exited with code $teardownExit"
+      return 12
+    fi
+  fi
+
+  return 0
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# Argument parsing
+#
+verbose=off
+testFilter="*.test"
+matchPattern=""
+keepFiles=off
+dryRun=off
+stopOnError=off
+maxTries=1
+diffTool=""
+noColor=off
+fromIx=0
+toIx=0
+declare -a fileArgs
+
+while [ "$#" != 0 ]
+do
+  if   [ "$1" == "-u" ];            then usage 0;
+  elif [ "$1" == "-v" ];            then verbose=on;
+  elif [ "$1" == "--filter" ];      then testFilter="$2"; shift;
+  elif [ "$1" == "--match" ];       then matchPattern="$2"; shift;
+  elif [ "$1" == "--keep" ];        then keepFiles=on;
+  elif [ "$1" == "--dryrun" ];      then dryRun=on;
+  elif [ "$1" == "--stopOnError" ]; then stopOnError=on;
+  elif [ "$1" == "--maxTries" ];    then maxTries="$2"; shift;
+  elif [ "$1" == "-g" ];            then diffTool="$SCRIPT_HOME/swDiffGui";
+  elif [ "$1" == "--diffTool" ];    then diffTool="$2"; shift;
+  elif [ "$1" == "--noColor" ];     then noColor=on;
+  elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
+  elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
+  elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
+  else
+    echo "$(basename $0): bad parameter/option: '${1}'"
+    echo
+    usage 1
+  fi
+  shift
+done
+
+
+# -----------------------------------------------------------------------------
+#
+# Build test file list from arguments (files and/or directories)
+# Default to cases/ if no file arguments given
+#
+if [ ${#fileArgs[@]} == 0 ]; then
+  fileArgs=("test/funcTests/cases")
+fi
+
+testFiles=""
+for arg in "${fileArgs[@]}"; do
+  if [ -f "$arg" ]; then
+    testFiles="$testFiles $arg"
+  elif [ -d "$arg" ]; then
+    dirFiles=$(find "$arg" -name "$testFilter" | sort)
+    testFiles="$testFiles $dirFiles"
+  fi
+done
+
+# Trim leading space and sort
+testFiles=$(echo "$testFiles" | tr ' ' '\n' | sed '/^$/d' | sort)
+
+if [ "$matchPattern" != "" ]; then
+  testFiles=$(echo "$testFiles" | grep "$matchPattern")
+fi
+
+totalTests=$(echo "$testFiles" | grep -c '.')
+
+if [ "$totalTests" == 0 ]; then
+  echo "No test files found"
+  exit 0
+fi
+
+
+# -----------------------------------------------------------------------------
+#
+# Dry run: just list tests
+#
+if [ "$dryRun" == "on" ]; then
+  echo "Found $totalTests test(s):"
+  ix=1
+  for testFile in $testFiles; do
+    name=$(extractSection "NAME" "$testFile")
+    printf "  %3d. %-60s %s\n" $ix "$testFile" "$name"
+    ix=$((ix + 1))
+  done
+  exit 0
+fi
+
+
+# -----------------------------------------------------------------------------
+#
+# Main loop
+#
+logMsg "=== swTest starting: $totalTests tests ==="
+
+LINE_WIDTH=120
+
+declare -a failedTests
+declare -a failedReasons
+passCount=0
+failCount=0
+skipCount=0
+testIx=1
+
+for testFile in $testFiles; do
+  # Index filtering
+  if [ "$fromIx" != 0 ] && [ $testIx -lt $fromIx ]; then
+    testIx=$((testIx + 1))
+    continue
+  fi
+  if [ "$toIx" != 0 ] && [ $testIx -gt $toIx ]; then
+    testIx=$((testIx + 1))
+    continue
+  fi
+
+  startTime=$(date +%s%3N)
+
+  # Retry loop
+  result=1
+  for tryNo in $(seq 1 $maxTries); do
+    runTest "$testFile" "$tryNo"
+    result=$?
+
+    if [ "$result" == 0 ]; then
+      break
+    fi
+
+    if [ "$tryNo" != "$maxTries" ]; then
+      vMsg "  Retry $((tryNo + 1))/$maxTries ..."
+    fi
+  done
+
+  endTime=$(date +%s%3N)
+  durationMs=$((endTime - startTime))
+  durationSec=$((durationMs / 1000))
+  durationFrac=$((durationMs % 1000))
+
+  # Build display name: relative path without .test suffix
+  displayName=$(basename "$testFile" .test)
+  dirPart=$(dirname "$testFile")
+  # If tests are in a subdirectory, show the last dir component
+  parentDir=$(basename "$dirPart")
+  if [ "$parentDir" != "." ] && [ "$parentDir" != "/" ]; then
+    displayName="${parentDir}/${displayName}"
+  fi
+
+  # Build prefix: NNNN/TOTAL/FAILS:
+  prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
+
+  # Build suffix: N.NNNs
+  suffix=$(printf "%d.%03ds" $durationSec $durationFrac)
+
+  # Calculate dots needed
+  textPart="$prefix $displayName "
+  textLen=${#textPart}
+  suffixLen=${#suffix}
+  dotsNeeded=$((LINE_WIDTH - textLen - suffixLen - 2))
+  if [ $dotsNeeded -lt 3 ]; then
+    dotsNeeded=3
+  fi
+  dots=$(printf '%*s' $dotsNeeded '' | tr ' ' '.')
+
+  if [ "$result" == 0 ]; then
+    # --- PASS ---
+    printf "%s %s %s  %s\n" "$prefix" "$displayName" "$dots" "$suffix"
+    passCount=$((passCount + 1))
+
+    if [ "$keepFiles" != "on" ]; then
+      fileCleanup "$testFile"
+    fi
+  else
+    # --- FAIL ---
+    local_dir=$(dirname "$testFile")
+    local_base=$(basename "$testFile" .test)
+    local_prefix="$local_dir/$local_base"
+
+    case $result in
+      7)  errorText="RUN: stderr not empty" ;;
+      8)  errorText="RUN: non-zero exit" ;;
+      9)  errorText="output mismatch" ;;
+      10) errorText="INIT: stderr not empty" ;;
+      11) errorText="INIT: non-zero exit" ;;
+      12) errorText="TEARDOWN error" ;;
+      *)  errorText="error code $result" ;;
+    esac
+
+    if [ "$noColor" == "on" ]; then
+      printf "%s %s %s  FAIL: %s (%d.%03ds)\n" "$prefix" "$displayName" "$dots" "$errorText" $durationSec $durationFrac
+    else
+      printf "%s %s %s  ${RED}FAIL: %s${NC} (%d.%03ds)\n" "$prefix" "$displayName" "$dots" "$errorText" $durationSec $durationFrac
+    fi
+
+    failCount=$((failCount + 1))
+    failedTests+=("$testFile")
+    failedReasons+=("$errorText")
+
+    if [ "$result" == 9 ] && [ "$diffTool" != "" ]; then
+      $diffTool -r "$local_prefix.expect" -i "$local_prefix.out"
+    fi
+
+    local_teardown="$local_prefix.teardown"
+    if [ -s "$local_teardown" ]; then
+      bash "$local_teardown" > /dev/null 2>&1
+    fi
+
+    if [ "$stopOnError" == "on" ]; then
+      echo ""
+      echo "Stopping on first error (--stopOnError)"
+      break
+    fi
+  fi
+
+  testIx=$((testIx + 1))
+done
+
+
+# -----------------------------------------------------------------------------
+#
+# Summary
+#
+total=$((passCount + failCount + skipCount))
+
+if [ "$failCount" == 0 ]; then
+  echo ""
+  if [ "$noColor" == "on" ]; then
+    echo "All $total tests passed"
+  else
+    echo -e "${GREEN}All $total tests passed${NC}"
+  fi
+else
+  echo ""
+  echo "Failed tests:"
+  for i in "${!failedTests[@]}"; do
+    echo "  ${failedTests[$i]}: ${failedReasons[$i]}"
+  done
+  echo ""
+  if [ "$noColor" == "on" ]; then
+    echo "$total tests: $passCount passed, $failCount failed"
+  else
+    echo -e "$total tests: ${GREEN}$passCount passed${NC}, ${RED}$failCount failed${NC}"
+  fi
+  logMsg "=== swTest finished: $failCount FAILURES ==="
+  exit 1
+fi
+
+logMsg "=== swTest finished: all tests passed ==="
+exit 0

@@ -1,0 +1,17 @@
+HTTP/1.1 200 OK
+Content-Length: REGEX(\d+)
+Date: REGEX(.*)
+Content-Type: application/json
+
+{
+  "id": "urn:ngsi-ld:Entity:E1",
+  "type": "T",
+  "status": REGEX("value": ".+", "type": "Property")
+}
+#SORT_START
+apple
+banana
+cherry
+date
+#SORT_END
+Done
