@@ -8,7 +8,7 @@
 # Functions:
 #   Broker:  swBrokerStart, swBrokerStop
 #   HTTP:    swCurl
-#   DB:      swDbInit, swDbDrop
+#   DB:      swDbInit, swDbDrop  (must be defined by repo's swTestFunctions.sh)
 #   Utility: swSleep, swLog, swAwaitPort
 #
 
@@ -241,32 +241,6 @@ function swCurl()
   echo ""
   cat /tmp/swCurlBody.out
   echo
-}
-
-
-# =============================================================================
-#
-# swDbInit - initialize database
-#
-function swDbInit()
-{
-  local db=${1:-$SW_DB_NAME}
-
-  # Drop and recreate - override this function for your DB engine
-  swDbDrop "$db" 2>/dev/null
-  echo "swDbInit: $db (no DB engine configured yet)" >&2
-}
-
-
-# =============================================================================
-#
-# swDbDrop - drop database
-#
-function swDbDrop()
-{
-  local db=${1:-$SW_DB_NAME}
-
-  echo "swDbDrop: $db (no DB engine configured yet)" >&2
 }
 
 
