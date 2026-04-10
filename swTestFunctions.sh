@@ -196,9 +196,10 @@ function swCurl()
 
   # Accept header
   case "$_outFormat" in
-    jsonld)  curlArgs+=(-H "Accept: application/ld+json") ;;
-    text)    curlArgs+=(-H "Accept: text/plain") ;;
-    *)       curlArgs+=(-H "Accept: application/json") ;;
+    jsonld)   curlArgs+=(-H "Accept: application/ld+json") ;;
+    geojson)  curlArgs+=(-H "Accept: application/geo+json") ;;
+    text)     curlArgs+=(-H "Accept: text/plain") ;;
+    *)        curlArgs+=(-H "Accept: application/json") ;;
   esac
 
   # Payload
