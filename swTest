@@ -44,6 +44,63 @@ export REPO_ROOT
 SW_TEST_FUNCTIONS="${SW_TEST_FUNCTIONS:-${REPO_ROOT}/test/funcTests/swTestFunctions.sh}"
 export SW_TEST_FUNCTIONS
 
+# Repo-specific CLI parameters file
+# Sourced before argument parsing so repos can inject custom options
+SW_TEST_PARAMS="${SW_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/swTestParams.sh}"
+
+
+# -----------------------------------------------------------------------------
+#
+# Repo-injectable CLI parameters
+#
+# Arrays indexed in parallel:
+#   SW_CLI_PARAM_NAMES[i]    - option name, e.g. "-db"
+#   SW_CLI_PARAM_VARS[i]     - variable name, e.g. "SW_DB_TYPE"
+#   SW_CLI_PARAM_DEFAULTS[i] - default value, e.g. "ramdb"
+#   SW_CLI_PARAM_DESCS[i]    - description for usage output
+#   SW_CLI_PARAM_TAGS[i]     - tag for SKIP_/REQUIRE_ markers, e.g. "DB"
+#
+declare -a SW_CLI_PARAM_NAMES
+declare -a SW_CLI_PARAM_VARS
+declare -a SW_CLI_PARAM_DEFAULTS
+declare -a SW_CLI_PARAM_DESCS
+declare -a SW_CLI_PARAM_TAGS
+
+#
+# swCliParamAdd - register a custom CLI parameter
+#
+# $1: option name      (e.g. "-db")
+# $2: variable name    (e.g. "SW_DB_TYPE")
+# $3: default value    (e.g. "ramdb")
+# $4: description      (e.g. "Current-state DB plugin (ramdb|mongoc)")
+# $5: skip/require tag (e.g. "DB" => test files use SKIP_DB: / REQUIRE_DB:)
+#
+function swCliParamAdd()
+{
+  local ix=${#SW_CLI_PARAM_NAMES[@]}
+  SW_CLI_PARAM_NAMES[$ix]="$1"
+  SW_CLI_PARAM_VARS[$ix]="$2"
+  SW_CLI_PARAM_DEFAULTS[$ix]="$3"
+  SW_CLI_PARAM_DESCS[$ix]="$4"
+  SW_CLI_PARAM_TAGS[$ix]="$5"
+}
+
+# Source repo params file (registers custom CLI options)
+if [ -f "$SW_TEST_PARAMS" ]; then
+  source "$SW_TEST_PARAMS"
+fi
+
+# Apply defaults for all registered params (NONE means "not set")
+for ix in "${!SW_CLI_PARAM_NAMES[@]}"; do
+  local_var="${SW_CLI_PARAM_VARS[$ix]}"
+  local_default="${SW_CLI_PARAM_DEFAULTS[$ix]}"
+  if [ "$local_default" == "NONE" ]; then
+    eval "export ${local_var}=\"\${${local_var}:-NONE}\""
+  else
+    eval "export ${local_var}=\"\${${local_var}:-${local_default}}\""
+  fi
+done
+
 
 # -----------------------------------------------------------------------------
 #
@@ -87,6 +144,20 @@ function usage()
   echo "$empty [--toIx <N>]                   (stop at test index N)"
   echo "$empty [<file.test> | <directory>]... (default: cases/)"
 
+  # Repo-injected parameters
+  for ix in "${!SW_CLI_PARAM_NAMES[@]}"; do
+    local_name="${SW_CLI_PARAM_NAMES[$ix]}"
+    local_desc="${SW_CLI_PARAM_DESCS[$ix]}"
+    local_default="${SW_CLI_PARAM_DEFAULTS[$ix]}"
+    local_padding=$((28 - ${#local_name} - ${#local_desc}))
+    if [ $local_padding -lt 1 ]; then local_padding=1; fi
+    if [ "$local_default" == "NONE" ]; then
+      printf "%s [%s <%s>]%*s(not set by default)\n" "$empty" "$local_name" "$local_desc" $local_padding ""
+    else
+      printf "%s [%s <%s>]%*s(default: %s)\n" "$empty" "$local_name" "$local_desc" $local_padding "" "$local_default"
+    fi
+  done
+
   exit $1
 }
 
@@ -116,6 +187,66 @@ function colorSkip()
 {
   if [ "$noColor" == "on" ]; then echo "SKIP";
   else echo -e "${YELLOW}SKIP${NC}"; fi
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# shouldSkipTest - check REQUIRE_<TAG> / SKIP_<TAG> markers in a test file
+#
+# For each registered CLI param that has a tag, grep the test file for:
+#   # REQUIRE_<TAG>: val1 val2 ...   (only run if current value is in the list)
+#   # SKIP_<TAG>: val1 val2 ...      (skip if current value is in the list)
+#
+# Returns 0 if test should be skipped (sets SKIP_REASON), 1 if it should run.
+#
+function shouldSkipTest()
+{
+  local testFile="$1"
+  SKIP_REASON=""
+
+  for ix in "${!SW_CLI_PARAM_TAGS[@]}"; do
+    local tag="${SW_CLI_PARAM_TAGS[$ix]}"
+    if [ -z "$tag" ]; then continue; fi
+
+    local varName="${SW_CLI_PARAM_VARS[$ix]}"
+    local currentValue
+    eval "currentValue=\"\${$varName}\""
+
+    # Skip check not applicable if param was not set
+    if [ "$currentValue" == "NONE" ]; then continue; fi
+
+    # Check REQUIRE_<TAG>
+    local requireLine
+    requireLine=$(grep "^# *REQUIRE_${tag}:" "$testFile" 2>/dev/null | head -1)
+    if [ -n "$requireLine" ]; then
+      local values="${requireLine#*:}"
+      values=$(echo $values)  # trim whitespace
+      local found=false
+      for v in $values; do
+        if [ "$v" == "$currentValue" ]; then found=true; break; fi
+      done
+      if [ "$found" != "true" ]; then
+        SKIP_REASON="requires ${tag}=${values// /|}, running with $currentValue"
+        return 0
+      fi
+    fi
+
+    # Check SKIP_<TAG>
+    local skipLine
+    skipLine=$(grep "^# *SKIP_${tag}:" "$testFile" 2>/dev/null | head -1)
+    if [ -n "$skipLine" ]; then
+      local values="${skipLine#*:}"
+      for v in $values; do
+        if [ "$v" == "$currentValue" ]; then
+          SKIP_REASON="skipped for ${tag}=$currentValue"
+          return 0
+        fi
+      done
+    fi
+  done
+
+  return 1
 }
 
 
@@ -353,9 +484,22 @@ do
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
   else
-    echo "$(basename $0): bad parameter/option: '${1}'"
-    echo
-    usage 1
+    # Check repo-injected parameters
+    matched=false
+    for ix in "${!SW_CLI_PARAM_NAMES[@]}"; do
+      if [ "$1" == "${SW_CLI_PARAM_NAMES[$ix]}" ]; then
+        eval "export ${SW_CLI_PARAM_VARS[$ix]}=\"$2\""
+        shift
+        matched=true
+        break
+      fi
+    done
+
+    if [ "$matched" != "true" ]; then
+      echo "$(basename $0): bad parameter/option: '${1}'"
+      echo
+      usage 1
+    fi
   fi
   shift
 done
@@ -433,6 +577,22 @@ for testFile in $testFiles; do
     continue
   fi
   if [ "$toIx" != 0 ] && [ $testIx -gt $toIx ]; then
+    testIx=$((testIx + 1))
+    continue
+  fi
+
+  # SKIP_<TAG> / REQUIRE_<TAG> filtering
+  if shouldSkipTest "$testFile"; then
+    displayName=$(basename "$testFile" .test)
+    dirPart=$(dirname "$testFile")
+    parentDir=$(basename "$dirPart")
+    if [ "$parentDir" != "." ] && [ "$parentDir" != "/" ]; then
+      displayName="${parentDir}/${displayName}"
+    fi
+    prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
+    skipMsg=$(colorSkip)
+    printf "%s %s  %s (%s)\n" "$prefix" "$displayName" "$skipMsg" "$SKIP_REASON"
+    skipCount=$((skipCount + 1))
     testIx=$((testIx + 1))
     continue
   fi
@@ -544,12 +704,21 @@ done
 #
 total=$((passCount + failCount + skipCount))
 
+skipSuffix=""
+if [ "$skipCount" != 0 ]; then
+  if [ "$noColor" == "on" ]; then
+    skipSuffix=", $skipCount skipped"
+  else
+    skipSuffix=", ${YELLOW}$skipCount skipped${NC}"
+  fi
+fi
+
 if [ "$failCount" == 0 ]; then
   echo ""
   if [ "$noColor" == "on" ]; then
-    echo "All $total tests passed"
+    echo "$total tests: $passCount passed${skipSuffix}"
   else
-    echo -e "${GREEN}All $total tests passed${NC}"
+    echo -e "$total tests: ${GREEN}$passCount passed${NC}${skipSuffix}"
   fi
 else
   echo ""
@@ -559,9 +728,9 @@ else
   done
   echo ""
   if [ "$noColor" == "on" ]; then
-    echo "$total tests: $passCount passed, $failCount failed"
+    echo "$total tests: $passCount passed, $failCount failed${skipSuffix}"
   else
-    echo -e "$total tests: ${GREEN}$passCount passed${NC}, ${RED}$failCount failed${NC}"
+    echo -e "$total tests: ${GREEN}$passCount passed${NC}, ${RED}$failCount failed${NC}${skipSuffix}"
   fi
   logMsg "=== swTest finished: $failCount FAILURES ==="
   exit 1
