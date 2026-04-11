@@ -483,6 +483,8 @@ do
   elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
+  elif [ -f "test/funcTests/cases/$1" ]; then fileArgs+=("test/funcTests/cases/$1");
+  elif [ -f "test/funcTests/cases/$1.test" ]; then fileArgs+=("test/funcTests/cases/$1.test");
   else
     # Check repo-injected parameters
     matched=false
