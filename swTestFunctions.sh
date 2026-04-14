@@ -34,6 +34,8 @@ SW_BROKER_LOG_DIR=${SW_BROKER_LOG_DIR:-"/tmp"}
 SW_BROKER_PID_FILE=${SW_BROKER_PID_FILE:-"/tmp/swBroker.pid"}
 SW_BROKER_EXTRA_PARAMS=${SW_BROKER_EXTRA_PARAMS:-""}
 
+KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}
+
 SW_DB_HOST=${SW_DB_HOST:-"localhost"}
 SW_DB_PORT=${SW_DB_PORT:-5432}
 SW_DB_USER=${SW_DB_USER:-"$USER"}
@@ -240,7 +242,14 @@ function swCurl()
   head -1 /tmp/swCurlHeaders.out | tr -d '\r'
   tail -n +2 /tmp/swCurlHeaders.out | tr -d '\r' | grep -v "^$"
   echo ""
-  cat /tmp/swCurlBody.out
+
+  # Sort JSON object keys for deterministic output across DB backends.
+  # kjson outputs a trailing newline; raw body does not, so add one via echo.
+  if [ -n "$KJSON" ] && [ -s /tmp/swCurlBody.out ]; then
+    $KJSON -sort < /tmp/swCurlBody.out 2>/dev/null | head -c -1 || cat /tmp/swCurlBody.out
+  else
+    cat /tmp/swCurlBody.out
+  fi
   echo
 }
 
