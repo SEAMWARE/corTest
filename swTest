@@ -410,29 +410,29 @@ function runTest()
   bash "$prefix.run" > "$prefix.out" 2> "$prefix.run.stderr"
   local runExit=$?
 
+  # TEARDOWN must always run once INIT succeeded, regardless of whether
+  # RUN or the output diff failed — otherwise a failed test leaves the
+  # broker running, the mongo DB populated, and subsequent tests see
+  # stale state.
+  local rc=0
+
   if [ -s "$prefix.run.stderr" ]; then
     echo "  RUN produced stderr:"
     cat "$prefix.run.stderr" | head -5
-    return 7
-  fi
-
-  if [ "$runExit" != 0 ]; then
+    rc=7
+  elif [ "$runExit" != 0 ]; then
     echo "  RUN exited with code $runExit"
-    return 8
+    rc=8
+  else
+    vMsg "  Comparing output ..."
+    $SCRIPT_HOME/swDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
+    if [ "$?" != 0 ]; then
+      vMsg "  Output mismatch"
+      rc=9
+    fi
   fi
 
-  # --- Compare output ---
-  vMsg "  Comparing output ..."
-
-  $SCRIPT_HOME/swDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
-  local diffExit=$?
-
-  if [ "$diffExit" != 0 ]; then
-    vMsg "  Output mismatch"
-    return 9
-  fi
-
-  # --- TEARDOWN ---
+  # --- TEARDOWN (always, so broker + DB state don't leak to next tests) ---
   if [ -s "$prefix.teardown" ]; then
     vMsg "  Running TEARDOWN ..."
     logMsg "TEARDOWN: $testFile"
@@ -442,11 +442,13 @@ function runTest()
 
     if [ "$teardownExit" != 0 ]; then
       echo "  TEARDOWN exited with code $teardownExit"
-      return 12
+      # Only promote to TEARDOWN error if the test itself was OK;
+      # otherwise the test's own failure is the primary signal.
+      [ $rc -eq 0 ] && rc=12
     fi
   fi
 
-  return 0
+  return $rc
 }
 
 
