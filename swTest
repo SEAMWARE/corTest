@@ -159,6 +159,22 @@ function usage()
     fi
   done
 
+  # Known tags (collected from --TAGS-- sections of every test in the default
+  # cases directory)
+  local casesDir="test/funcTests/cases"
+  if [ -d "$casesDir" ]; then
+    local allTags
+    allTags=$(for f in "$casesDir"/*.test; do
+      [ -f "$f" ] || continue
+      sed -n '/^--TAGS--$/,/^--/p' "$f" | grep -v '^--' | tr ' ' '\n'
+    done 2>/dev/null | sort -u | grep -v '^$' | paste -sd' ' -)
+    if [ -n "$allTags" ]; then
+      echo
+      echo "Known tags (pass one or more to --tags):"
+      echo "$allTags" | fold -s -w 76 | sed 's/^/  /'
+    fi
+  fi
+
   exit $1
 }
 
