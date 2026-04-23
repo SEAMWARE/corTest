@@ -591,13 +591,15 @@ if [ "$dryRun" == "on" ]; then
       dryFiles+=("$testFile")
     fi
   done
-  echo "Found ${#dryFiles[@]} test(s):"
-  ix=1
-  for testFile in "${dryFiles[@]}"; do
-    name=$(extractSection "NAME" "$testFile")
-    printf "  %3d. %-60s %s\n" $ix "$testFile" "$name"
-    ix=$((ix + 1))
-  done
+  echo "Found ${#dryFiles[@]} test(s)"
+  if [ "$verbose" == "on" ]; then
+    ix=1
+    for testFile in "${dryFiles[@]}"; do
+      name=$(extractSection "NAME" "$testFile")
+      printf "  %3d. %-60s %s\n" $ix "$testFile" "$name"
+      ix=$((ix + 1))
+    done
+  fi
   exit 0
 fi
 
