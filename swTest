@@ -227,7 +227,7 @@ function shouldSkipTest()
         if [ "$v" == "$currentValue" ]; then found=true; break; fi
       done
       if [ "$found" != "true" ]; then
-        SKIP_REASON="requires ${tag}=${values// /|}, running with $currentValue"
+        SKIP_REASON="requires ${tag}=${values// /|}"
         return 0
       fi
     fi
@@ -565,7 +565,9 @@ fi
 #
 logMsg "=== swTest starting: $totalTests tests ==="
 
-LINE_WIDTH=120
+# Column where the dots end (same for PASS, FAIL, SKIP).
+# The status suffix (time / "SKIP (reason)" / "FAIL: ...") comes after.
+DOT_END_COL=90
 
 declare -a failedTests
 declare -a failedReasons
@@ -573,6 +575,7 @@ passCount=0
 failCount=0
 skipCount=0
 testIx=1
+suiteStartMs=$(date +%s%3N)
 
 for testFile in $testFiles; do
   # Index filtering
@@ -595,7 +598,12 @@ for testFile in $testFiles; do
     fi
     prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
     skipMsg=$(colorSkip)
-    printf "%s %s  %s (%s)\n" "$prefix" "$displayName" "$skipMsg" "$SKIP_REASON"
+    textPart="$prefix $displayName "
+    textLen=${#textPart}
+    dotsNeeded=$((DOT_END_COL - textLen))
+    if [ $dotsNeeded -lt 3 ]; then dotsNeeded=3; fi
+    dots=$(printf '%*s' $dotsNeeded '' | tr ' ' '.')
+    printf "%s %s %s  %s (%s)\n" "$prefix" "$displayName" "$dots" "$skipMsg" "$SKIP_REASON"
     skipCount=$((skipCount + 1))
     testIx=$((testIx + 1))
     continue
@@ -638,11 +646,10 @@ for testFile in $testFiles; do
   # Build suffix: N.NNNs
   suffix=$(printf "%d.%03ds" $durationSec $durationFrac)
 
-  # Calculate dots needed
+  # Calculate dots needed (dots end at DOT_END_COL — same column as SKIP / FAIL)
   textPart="$prefix $displayName "
   textLen=${#textPart}
-  suffixLen=${#suffix}
-  dotsNeeded=$((LINE_WIDTH - textLen - suffixLen - 2))
+  dotsNeeded=$((DOT_END_COL - textLen))
   if [ $dotsNeeded -lt 3 ]; then
     dotsNeeded=3
   fi
@@ -708,6 +715,12 @@ done
 #
 total=$((passCount + failCount + skipCount))
 
+suiteEndMs=$(date +%s%3N)
+suiteMs=$((suiteEndMs - suiteStartMs))
+suiteSec=$((suiteMs / 1000))
+suiteFrac=$(((suiteMs % 1000) / 100))
+timeSuffix=$(printf ", in %d.%d seconds" $suiteSec $suiteFrac)
+
 skipSuffix=""
 if [ "$skipCount" != 0 ]; then
   if [ "$noColor" == "on" ]; then
@@ -720,9 +733,9 @@ fi
 if [ "$failCount" == 0 ]; then
   echo ""
   if [ "$noColor" == "on" ]; then
-    echo "$total tests: $passCount passed${skipSuffix}"
+    echo "$total tests: $passCount passed${skipSuffix}${timeSuffix}"
   else
-    echo -e "$total tests: ${GREEN}$passCount passed${NC}${skipSuffix}"
+    echo -e "$total tests: ${GREEN}$passCount passed${NC}${skipSuffix}${timeSuffix}"
   fi
 else
   echo ""
@@ -732,9 +745,9 @@ else
   done
   echo ""
   if [ "$noColor" == "on" ]; then
-    echo "$total tests: $passCount passed, $failCount failed${skipSuffix}"
+    echo "$total tests: $passCount passed, $failCount failed${skipSuffix}${timeSuffix}"
   else
-    echo -e "$total tests: ${GREEN}$passCount passed${NC}, ${RED}$failCount failed${NC}${skipSuffix}"
+    echo -e "$total tests: ${GREEN}$passCount passed${NC}, ${RED}$failCount failed${NC}${skipSuffix}${timeSuffix}"
   fi
   logMsg "=== swTest finished: $failCount FAILURES ==="
   exit 1
