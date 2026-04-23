@@ -142,6 +142,7 @@ function usage()
   echo "$empty [--noColor]                    (disable colored output)"
   echo "$empty [--fromIx <N>]                 (start from test index N)"
   echo "$empty [--toIx <N>]                   (stop at test index N)"
+  echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [<file.test> | <directory>]... (default: cases/)"
 
   # Repo-injected parameters
@@ -263,6 +264,38 @@ function extractSection()
   local file="$2"
 
   sed -n "/^--${section}--$/,/^--/p" "$file" | grep -v "^--"
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# tagsFilterMatches - return 0 if the test should run given $tagsFilter
+#
+# $1: path to .test file
+#
+# Returns 0 if the filter is empty (no filtering) or if any tag in the
+# test's --TAGS-- section is in $tagsFilter (comma-separated). Returns
+# 1 if the test has no --TAGS-- section or no intersecting tag.
+#
+function tagsFilterMatches()
+{
+  [ -z "$tagsFilter" ] && return 0
+
+  local testFile="$1"
+  local testTags
+  testTags=$(extractSection "TAGS" "$testFile")
+  [ -z "$testTags" ] && return 1
+
+  local wanted
+  IFS=',' read -ra wanted <<< "$tagsFilter"
+  for w in "${wanted[@]}"; do
+    w="${w// /}"
+    [ -z "$w" ] && continue
+    for t in $testTags; do
+      if [ "$t" == "$w" ]; then return 0; fi
+    done
+  done
+  return 1
 }
 
 
@@ -467,6 +500,7 @@ diffTool=""
 noColor=off
 fromIx=0
 toIx=0
+tagsFilter=""
 declare -a fileArgs
 
 while [ "$#" != 0 ]
@@ -484,6 +518,7 @@ do
   elif [ "$1" == "--noColor" ];     then noColor=on;
   elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
+  elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
   elif [ -f "test/funcTests/cases/$1" ]; then fileArgs+=("test/funcTests/cases/$1");
   elif [ -f "test/funcTests/cases/$1.test" ]; then fileArgs+=("test/funcTests/cases/$1.test");
@@ -584,6 +619,12 @@ for testFile in $testFiles; do
     continue
   fi
   if [ "$toIx" != 0 ] && [ $testIx -gt $toIx ]; then
+    testIx=$((testIx + 1))
+    continue
+  fi
+
+  # --tags filtering (silent skip, like --fromIx/--toIx)
+  if ! tagsFilterMatches "$testFile"; then
     testIx=$((testIx + 1))
     continue
   fi
