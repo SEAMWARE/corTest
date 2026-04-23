@@ -583,9 +583,17 @@ fi
 # Dry run: just list tests
 #
 if [ "$dryRun" == "on" ]; then
-  echo "Found $totalTests test(s):"
-  ix=1
+  # Apply --tags filter in dryrun mode too so the listing matches what
+  # a real run would actually execute.
+  declare -a dryFiles
   for testFile in $testFiles; do
+    if tagsFilterMatches "$testFile"; then
+      dryFiles+=("$testFile")
+    fi
+  done
+  echo "Found ${#dryFiles[@]} test(s):"
+  ix=1
+  for testFile in "${dryFiles[@]}"; do
     name=$(extractSection "NAME" "$testFile")
     printf "  %3d. %-60s %s\n" $ix "$testFile" "$name"
     ix=$((ix + 1))
