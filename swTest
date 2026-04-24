@@ -586,6 +586,18 @@ if [ "$matchPattern" != "" ]; then
   testFiles=$(echo "$testFiles" | grep "$matchPattern")
 fi
 
+# Apply --tags filter here (before totalTests is counted) so index/total
+# reflect the filtered subset — e.g. "0005/35/0" not "0164/177/0".
+if [ -n "$tagsFilter" ]; then
+  filtered=""
+  for tf in $testFiles; do
+    if tagsFilterMatches "$tf"; then
+      filtered="$filtered$tf"$'\n'
+    fi
+  done
+  testFiles=$(echo "$filtered" | sed '/^$/d')
+fi
+
 totalTests=$(echo "$testFiles" | grep -c '.')
 
 if [ "$totalTests" == 0 ]; then
@@ -649,11 +661,7 @@ for testFile in $testFiles; do
     continue
   fi
 
-  # --tags filtering (silent skip, like --fromIx/--toIx)
-  if ! tagsFilterMatches "$testFile"; then
-    testIx=$((testIx + 1))
-    continue
-  fi
+  # --tags filtering is applied up front (before totalTests is counted)
 
   # SKIP_<TAG> / REQUIRE_<TAG> filtering
   if shouldSkipTest "$testFile"; then
