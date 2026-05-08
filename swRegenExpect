@@ -24,7 +24,7 @@ CASES = pathlib.Path("test/funcTests/cases")
 TS_FIELDS = (
     "notifiedAt", "observedAt", "createdAt", "modifiedAt",
     "deletedAt", "lastNotification", "lastSuccess", "lastFailure",
-    "expiresAt", "lastChange",
+    "expiresAt", "lastChange", "lastUsage",
     "contextSourceTimeAt", "contextSourceUptime",
 )
 TS_RE = re.compile(
@@ -47,10 +47,43 @@ UA_RE = re.compile(r'("User-Agent"\s*:\s*)"swBroker[^"]*"')
 # Embedded Content-Length inside ftClient body dumps
 ECL_RE = re.compile(r'("Content-Length"\s*:\s*)"\d+"')
 
+# Escaped-JSON forms — appear when a notification body is itself a
+# JSON-encoded string (e.g. MQTT delivery: `"body": "{...escaped JSON...}"`).
+# The volatile fields inside are visible as \"notifiedAt\":\"...\" etc.
+ESC_NID_RE = re.compile(r'\\"urn:ngsi-ld:Notification:[0-9a-fA-F]+:\d+\\"')
+ESC_TS_RE = re.compile(
+    r'(\\"(?:' + "|".join(TS_FIELDS) + r')\\"\s*:\s*)\\"[^\\]+\\"'
+)
+
 
 def line_normalize(line, has_volatile_so_far):
     """Apply per-line normalisations. Returns (line, sets_volatile)."""
     sets_volatile = False
+
+    # Escaped-JSON body inside a string field (MQTT-style notification
+    # delivery): the line carries one nested body where notifiedAt + the
+    # notification id are both volatile. Two REGEX(...) wrappers on one
+    # line don't work (swDiff handles only one), so when escaped
+    # occurrences are present, build a whole-line regex covering every
+    # variable token in one shot.
+    has_esc_nid = ESC_NID_RE.search(line) is not None
+    has_esc_ts  = ESC_TS_RE.search(line) is not None
+    if has_esc_nid or has_esc_ts:
+        NID_HOLE = '\x01NID\x01'
+        TS_HOLE  = '\x01TS\x01'
+        work = ESC_NID_RE.sub(r'\\"' + NID_HOLE + r'\\"', line)
+        work = ESC_TS_RE.sub(r'\1\\"' + TS_HOLE + r'\\"', work)
+        escaped = re.escape(work)
+        escaped = escaped.replace(re.escape(NID_HOLE),
+                                  r'urn:ngsi-ld:Notification:[0-9a-f]+:\d+')
+        escaped = escaped.replace(re.escape(TS_HOLE), r'[^\\]+')
+        line = 'REGEX(' + escaped + ')'
+        if has_esc_ts:
+            sets_volatile = True
+        if UA_RE.search(line):
+            line = UA_RE.sub(r'\1"REGEX(swBroker/.*)"', line)
+        return line, sets_volatile
+
     if NID_RE.search(line):
         line = NID_RE.sub(r'"REGEX(urn:ngsi-ld:Notification:.*)"', line)
     matches = list(EM_RE.finditer(line))
