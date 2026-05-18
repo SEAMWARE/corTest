@@ -648,7 +648,7 @@ passCount=0
 failCount=0
 skipCount=0
 testIx=1
-suiteStartMs=$(date +%s%3N)
+suiteStartMs=$(( $(date +%s%N) / 1000000 ))
 
 for testFile in $testFiles; do
   # Index filtering
@@ -684,7 +684,7 @@ for testFile in $testFiles; do
     continue
   fi
 
-  startTime=$(date +%s%3N)
+  startTime=$(( $(date +%s%N) / 1000000 ))
 
   # Retry loop
   result=1
@@ -701,7 +701,7 @@ for testFile in $testFiles; do
     fi
   done
 
-  endTime=$(date +%s%3N)
+  endTime=$(( $(date +%s%N) / 1000000 ))
   durationMs=$((endTime - startTime))
   durationSec=$((durationMs / 1000))
   durationFrac=$((durationMs % 1000))
@@ -790,7 +790,7 @@ done
 #
 total=$((passCount + failCount + skipCount))
 
-suiteEndMs=$(date +%s%3N)
+suiteEndMs=$(( $(date +%s%N) / 1000000 ))
 suiteMs=$((suiteEndMs - suiteStartMs))
 suiteSec=$((suiteMs / 1000))
 suiteFrac=$(((suiteMs % 1000) / 100))
