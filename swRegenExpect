@@ -24,8 +24,8 @@ CASES = pathlib.Path("test/funcTests/cases")
 TS_FIELDS = (
     "notifiedAt", "observedAt", "createdAt", "modifiedAt",
     "deletedAt", "lastNotification", "lastSuccess", "lastFailure",
-    "expiresAt", "lastChange", "lastUsage",
-    "contextSourceTimeAt", "contextSourceUptime",
+    "expiresAt", "lastChange", "lastUsage", "lastUsedAt",
+    "contextSourceTimeAt", "contextSourceUptime", "instanceId",
 )
 TS_RE = re.compile(
     r'("(?:' + "|".join(TS_FIELDS) + r')"\s*:\s*)"[^"]+"'
