@@ -764,6 +764,16 @@ for testFile in $testFiles; do
     failedTests+=("$testFile")
     failedReasons+=("$errorText")
 
+    # Snapshot broker log files (one per role) alongside the test
+    # artifacts. swBrokerStart writes to /tmp/swBroker.<role>.log;
+    # the next test's brokerStart would clobber them.
+    local _log _role
+    for _log in /tmp/swBroker.*.log; do
+      [ -f "$_log" ] || continue
+      _role=$(basename "$_log" .log | sed 's/^swBroker\.//')
+      cp "$_log" "$local_prefix.$_role.log"
+    done
+
     if [ "$result" == 9 ] && [ "$diffTool" != "" ]; then
       $diffTool -r "$local_prefix.expect" -i "$local_prefix.out"
     fi
