@@ -44,6 +44,9 @@ EM_RE = re.compile(r'urn:ngsi-ld:EntityMap:[0-9a-fA-F]+')
 # User-Agent in ftClient body dumps carries the broker version
 UA_RE = re.compile(r'("User-Agent"\s*:\s*)"swBroker[^"]*"')
 
+# Next File Descriptor in /admin/version — host- and run-volatile
+FD_RE = re.compile(r'("Next File Descriptor"\s*:\s*)\d+')
+
 # Embedded Content-Length inside ftClient body dumps
 ECL_RE = re.compile(r'("Content-Length"\s*:\s*)"\d+"')
 
@@ -106,6 +109,9 @@ def line_normalize(line, has_volatile_so_far):
         sets_volatile = True
     if UA_RE.search(line):
         line = UA_RE.sub(r'\1"REGEX(swBroker/.*)"', line)
+    if FD_RE.search(line):
+        line = FD_RE.sub(r'\1REGEX(\\d+)', line)
+        sets_volatile = True
     return line, sets_volatile
 
 
