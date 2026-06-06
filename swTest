@@ -143,6 +143,7 @@ function usage()
   echo "$empty [--fromIx <N>]                 (start from test index N)"
   echo "$empty [--toIx <N>]                   (stop at test index N)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
+  echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
   echo "$empty [<file.test> | <directory>]... (default: cases/)"
 
   # Repo-injected parameters
@@ -295,11 +296,27 @@ function extractSection()
 #
 function tagsFilterMatches()
 {
-  [ -z "$tagsFilter" ] && return 0
+  [ -z "$tagsFilter" ] && [ -z "$skipTagsFilter" ] && return 0
 
   local testFile="$1"
   local testTags
   testTags=$(extractSection "TAGS" "$testFile")
+
+  # --skip-tags: drop any test whose tags intersect the skip set.
+  # A test with no --TAGS-- section is never skipped by --skip-tags.
+  if [ -n "$skipTagsFilter" ]; then
+    local unwanted
+    IFS=',' read -ra unwanted <<< "$skipTagsFilter"
+    for w in "${unwanted[@]}"; do
+      w="${w// /}"
+      [ -z "$w" ] && continue
+      for t in $testTags; do
+        if [ "$t" == "$w" ]; then return 1; fi
+      done
+    done
+    [ -z "$tagsFilter" ] && return 0
+  fi
+
   [ -z "$testTags" ] && return 1
 
   local wanted
@@ -517,6 +534,7 @@ noColor=off
 fromIx=0
 toIx=0
 tagsFilter=""
+skipTagsFilter=""
 declare -a fileArgs
 
 while [ "$#" != 0 ]
@@ -535,6 +553,7 @@ do
   elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
+  elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
   elif [ -f "test/funcTests/cases/$1" ]; then fileArgs+=("test/funcTests/cases/$1");
   elif [ -f "test/funcTests/cases/$1.test" ]; then fileArgs+=("test/funcTests/cases/$1.test");
@@ -586,9 +605,9 @@ if [ "$matchPattern" != "" ]; then
   testFiles=$(echo "$testFiles" | grep "$matchPattern")
 fi
 
-# Apply --tags filter here (before totalTests is counted) so index/total
-# reflect the filtered subset — e.g. "0005/35/0" not "0164/177/0".
-if [ -n "$tagsFilter" ]; then
+# Apply --tags / --skip-tags filter here (before totalTests is counted) so
+# index/total reflect the filtered subset — e.g. "0005/35/0" not "0164/177/0".
+if [ -n "$tagsFilter" ] || [ -n "$skipTagsFilter" ]; then
   filtered=""
   for tf in $testFiles; do
     if tagsFilterMatches "$tf"; then
