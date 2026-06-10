@@ -786,7 +786,8 @@ for testFile in $testFiles; do
     # Snapshot broker log files (one per role) alongside the test
     # artifacts. swBrokerStart writes to /tmp/swBroker.<role>.log;
     # the next test's brokerStart would clobber them.
-    local _log _role
+    # (This block runs at script top level, not in a function, so `local` is
+    #  illegal here — _log/_role are plain loop temporaries.)
     for _log in /tmp/swBroker.*.log; do
       [ -f "$_log" ] || continue
       _role=$(basename "$_log" .log | sed 's/^swBroker\.//')
