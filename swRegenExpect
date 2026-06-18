@@ -41,6 +41,11 @@ NID_RE = re.compile(
 # Link headers (entityMap=urn:ngsi-ld:EntityMap:HEX).
 EM_RE = re.compile(r'urn:ngsi-ld:EntityMap:[0-9a-fA-F]+')
 
+# Auto-generated ContextSourceRegistration id (when the create omits an id) —
+# the hex part is a process-volatile hash; the trailing counter is stable.
+# Appears as a JSON value ("id":"...") and in the Location header.
+CSR_RE = re.compile(r'urn:ngsi-ld:ContextSourceRegistration:[0-9a-fA-F]+:\d+')
+
 # User-Agent in ftClient body dumps carries the broker version
 UA_RE = re.compile(r'("User-Agent"\s*:\s*)"swBroker[^"]*"')
 
@@ -89,6 +94,8 @@ def line_normalize(line, has_volatile_so_far):
 
     if NID_RE.search(line):
         line = NID_RE.sub(r'"REGEX(urn:ngsi-ld:Notification:.*)"', line)
+    if CSR_RE.search(line):
+        line = CSR_RE.sub(r'REGEX(urn:ngsi-ld:ContextSourceRegistration:[0-9a-f]+:[0-9]+)', line)
     matches = list(EM_RE.finditer(line))
     if len(matches) == 1:
         line = EM_RE.sub('REGEX(urn:ngsi-ld:EntityMap:[0-9a-f]+)', line)

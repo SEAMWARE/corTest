@@ -138,6 +138,7 @@ function usage()
   echo "$empty [--dryrun]                     (list tests, don't run)"
   echo "$empty [--stopOnError]                (stop on first failure)"
   echo "$empty [--maxTries <N>]               (retry failing tests, default: 1)"
+  echo "$empty [--regen]                      (fill --EXPECT-- from captured output; needs an empty --EXPECT-- marker)"
   echo "$empty [--diffTool <path>]            (external diff tool on failure)"
   echo "$empty [--noColor]                    (disable colored output)"
   echo "$empty [--fromIx <N>]                 (start from test index N)"
@@ -362,8 +363,16 @@ function fileCreation()
     return 4
   fi
 
-  if [ ! -s "$prefix.expect" ]; then
+  # In --regen mode the EXPECT is (re)generated from the captured output, so an
+  # empty --EXPECT-- block is expected — only the marker itself must be present
+  # (swRegenExpect anchors on it). Otherwise EXPECT is mandatory.
+  if [ ! -s "$prefix.expect" ] && [ "$regen" != "on" ]; then
     echo "Error: --EXPECT-- section missing or empty in $testFile"
+    return 5
+  fi
+
+  if [ "$regen" == "on" ] && ! grep -q '^--EXPECT--$' "$testFile"; then
+    echo "Error: --regen needs an (empty) --EXPECT-- marker in $testFile"
     return 5
   fi
 
@@ -489,6 +498,11 @@ function runTest()
   elif [ "$runExit" != 0 ]; then
     echo "  RUN exited with code $runExit"
     rc=8
+  elif [ "$regen" == "on" ]; then
+    # Author mode: fill the --EXPECT-- block from the just-captured output,
+    # applying the volatility transforms (Date -> REGEX, timestamps, etc.).
+    vMsg "  Regenerating EXPECT ..."
+    $SCRIPT_HOME/swRegenExpect "$base"
   else
     vMsg "  Comparing output ..."
     $SCRIPT_HOME/swDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
@@ -531,6 +545,7 @@ stopOnError=off
 maxTries=1
 diffTool=""
 noColor=off
+regen=off
 fromIx=0
 toIx=0
 tagsFilter=""
@@ -547,6 +562,7 @@ do
   elif [ "$1" == "--dryrun" ];      then dryRun=on;
   elif [ "$1" == "--stopOnError" ]; then stopOnError=on;
   elif [ "$1" == "--maxTries" ];    then maxTries="$2"; shift;
+  elif [ "$1" == "--regen" ];       then regen=on;
   elif [ "$1" == "-g" ];            then diffTool="$SCRIPT_HOME/swDiffGui";
   elif [ "$1" == "--diffTool" ];    then diffTool="$2"; shift;
   elif [ "$1" == "--noColor" ];     then noColor=on;
