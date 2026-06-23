@@ -409,6 +409,12 @@ function fileCleanup()
   rm -f "$prefix.teardown.stderr"
   rm -f "$prefix.expect.sorted"
   rm -f "$prefix.out.sorted"
+
+  # Valgrind logs (--vt) live in /tmp, keyed on the test base name. Like the
+  # other artifacts they are removed on PASS and kept on FAIL — so a leftover
+  # /tmp/swValgrind.<test>.*.vg marks a test that leaked, just as a leftover
+  # .diff marks one that mismatched.
+  rm -f "/tmp/swValgrind.$base".*.vg
 }
 
 
@@ -689,6 +695,8 @@ declare -a failedReasons
 passCount=0
 failCount=0
 skipCount=0
+vgLeakCount=0    # --vt: # test cases with a definite/indirect leak
+vgErrorCount=0   # --vt: # test cases with a valgrind memory error
 testIx=1
 suiteStartMs=$(( $(date +%s%N) / 1000000 ))
 
@@ -750,15 +758,44 @@ for testFile in $testFiles; do
     fi
   done
 
-  # Valgrind verdict: a functionally-passing test still FAILS if the CB's
-  # valgrind report shows any memory error or a definite/indirect leak.
-  # (Tests that never start the CB produce no .vg file — not a valgrind fail.)
+  # Valgrind verdict (--vt). Only meaningful when the test PASSED functionally:
+  # a functional failure (or crash) makes the leak/error report unreliable, so we
+  # leave such a test as its functional failure and do NOT trust its .vg.
+  #
+  # For a functionally-passing test that started the CB:
+  #   - the report MUST be complete (HEAP SUMMARY + ERROR SUMMARY present) — a
+  #     truncated .vg (broker killed before valgrind finished) is a HARD FAIL,
+  #     never a silent pass (code 14);
+  #   - L (leak)  = definite+indirect lost bytes > 0;
+  #   - E (error) = ERROR SUMMARY count > 0 (errors-for-leak-kinds=none ⇒ pure
+  #     memory errors); cross-checked against Invalid/uninitialised headers;
+  #   - possibly-lost is recorded for display but never fails the gate.
+  vgLostBytes=0; vgErrCtx=0; vgPossiblyBytes=0
   if [ "$valgrind" == "on" ] && [ "$result" == 0 ]; then
     vgFiles=( "${SW_VALGRIND_LOG}".*.vg )
     if [ -e "${vgFiles[0]}" ]; then
-      if grep -hqE "ERROR SUMMARY: [1-9]" "${vgFiles[@]}" 2>/dev/null \
-         || grep -hE "(definitely|indirectly) lost:" "${vgFiles[@]}" 2>/dev/null | grep -qvE "lost: 0 bytes"; then
-        result=13
+      # Completeness: every .vg must carry both summaries.
+      vgComplete=yes
+      for vf in "${vgFiles[@]}"; do
+        grep -qE "HEAP SUMMARY" "$vf" 2>/dev/null && grep -qE "ERROR SUMMARY" "$vf" 2>/dev/null || vgComplete=no
+      done
+
+      if [ "$vgComplete" != "yes" ]; then
+        result=14   # truncated/incomplete report — cannot trust
+      else
+        vgLostBytes=$(grep -hE "(definitely|indirectly) lost:" "${vgFiles[@]}" 2>/dev/null \
+                      | sed -E 's/.*lost: ([0-9,]+) bytes.*/\1/' | tr -d ',' | awk '{s+=$1} END{print s+0}')
+        vgPossiblyBytes=$(grep -hE "possibly lost:" "${vgFiles[@]}" 2>/dev/null \
+                      | sed -E 's/.*lost: ([0-9,]+) bytes.*/\1/' | tr -d ',' | awk '{s+=$1} END{print s+0}')
+        vgErrCtx=$(grep -hoE "ERROR SUMMARY: [0-9]+" "${vgFiles[@]}" 2>/dev/null \
+                      | awk '{s+=$3} END{print s+0}')
+        # cross-check: real memory-error headers should agree with a non-zero count
+        vgErrHdr=$(grep -hcE "Invalid (read|write|free)|uninitialised|Mismatched free|Source and destination overlap" "${vgFiles[@]}" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+        if [ "$vgErrCtx" -eq 0 ] && [ "$vgErrHdr" -gt 0 ]; then vgErrCtx=$vgErrHdr; fi
+
+        if [ "$vgLostBytes" -gt 0 ]; then vgLeakCount=$((vgLeakCount + 1)); fi
+        if [ "$vgErrCtx"   -gt 0 ]; then vgErrorCount=$((vgErrorCount + 1)); fi
+        if [ "$vgLostBytes" -gt 0 ] || [ "$vgErrCtx" -gt 0 ]; then result=13; fi
       fi
     fi
   fi
@@ -777,8 +814,14 @@ for testFile in $testFiles; do
     displayName="${parentDir}/${displayName}"
   fi
 
-  # Build prefix: NNNN/TOTAL/FAILS:
-  prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
+  # Build prefix. Under --vt, show separate running tallies — E:memory-errors,
+  # L:leaks (both # of test cases), F:functional failures — like orion-ld's
+  # valgrindTestSuite. Otherwise the classic index/total/fails.
+  if [ "$valgrind" == "on" ]; then
+    prefix=$(printf "%04d/%d (E:%d L:%d F:%d):" $testIx $totalTests $vgErrorCount $vgLeakCount $failCount)
+  else
+    prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
+  fi
 
   # Build suffix: N.NNNs
   suffix=$(printf "%d.%03ds" $durationSec $durationFrac)
@@ -794,7 +837,12 @@ for testFile in $testFiles; do
 
   if [ "$result" == 0 ]; then
     # --- PASS ---
-    printf "%s %s %s  %s\n" "$prefix" "$displayName" "$dots" "$suffix"
+    # Surface possibly-lost (never fails the gate, but never silently ignored).
+    vgNote=""
+    if [ "$valgrind" == "on" ] && [ "${vgPossiblyBytes:-0}" -gt 0 ]; then
+      vgNote="  [poss-lost ${vgPossiblyBytes}B]"
+    fi
+    printf "%s %s %s  %s%s\n" "$prefix" "$displayName" "$dots" "$suffix" "$vgNote"
     passCount=$((passCount + 1))
 
     if [ "$keepFiles" != "on" ]; then
@@ -813,7 +861,10 @@ for testFile in $testFiles; do
       10) errorText="INIT: stderr not empty" ;;
       11) errorText="INIT: non-zero exit" ;;
       12) errorText="TEARDOWN error" ;;
-      13) errorText="valgrind: leak/error (see ${SW_VALGRIND_LOG}.*.vg)" ;;
+      13) errorText=$(printf "valgrind: L=%dB E=%d" "${vgLostBytes:-0}" "${vgErrCtx:-0}")
+          [ "${vgPossiblyBytes:-0}" -gt 0 ] && errorText="$errorText poss=${vgPossiblyBytes}B"
+          errorText="$errorText (see ${SW_VALGRIND_LOG}.*.vg)" ;;
+      14) errorText="valgrind: report INCOMPLETE — broker killed before finish, cannot trust" ;;
       *)  errorText="error code $result" ;;
     esac
 
