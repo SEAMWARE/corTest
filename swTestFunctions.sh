@@ -1,15 +1,17 @@
 # Copyright 2026 Seamware
 #
-# swTestFunctions.sh - Helper functions for swTest functional tests
+# swTestFunctions.sh - Generic helper functions for swTest functional tests
 #
 # Sourced by test scripts (--INIT--, --RUN--, --TEARDOWN-- sections).
 # The test harness (swTest) sources this file before running each test.
 #
+# These helpers are repo-agnostic. Repo-specific helpers (starting the program
+# under test, database setup, etc.) belong in the consuming repo's own
+# test/funcTests/swTestFunctions.sh, not here.
+#
 # Functions:
-#   Broker:  swBrokerStart, swBrokerStop
-#   HTTP:    swCurl
-#   DB:      swDbInit, swDbDrop  (must be defined by repo's swTestFunctions.sh)
-#   Utility: swSleep, swLog, swAwaitPort
+#   HTTP:    swCurl    - send a request, print status line + headers + body
+#   Utility: swLog, swAwaitPort, swSleep
 #
 
 
@@ -25,21 +27,11 @@ export SW_TEST_FUNCTIONS_SOURCED="YES"
 
 # =============================================================================
 #
-# Defaults - override via environment or swTestEnv.sh
+# Defaults - override via environment
 #
-SW_BROKER=${SW_BROKER:-"swBroker"}             # broker binary name
-SW_BROKER_PORT=${SW_BROKER_PORT:-1026}        # default broker port
-SW_BROKER_HOST=${SW_BROKER_HOST:-"localhost"}
-SW_BROKER_LOG_DIR=${SW_BROKER_LOG_DIR:-"/tmp"}
-SW_BROKER_PID_FILE=${SW_BROKER_PID_FILE:-"/tmp/swBroker.pid"}
-SW_BROKER_EXTRA_PARAMS=${SW_BROKER_EXTRA_PARAMS:-""}
-
-KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}
-
-SW_DB_HOST=${SW_DB_HOST:-"localhost"}
-SW_DB_PORT=${SW_DB_PORT:-5432}
-SW_DB_USER=${SW_DB_USER:-"$USER"}
-SW_DB_NAME=${SW_DB_NAME:-"swTest"}
+SW_HOST=${SW_HOST:-"localhost"}                        # default target host for swCurl
+SW_PORT=${SW_PORT:-1026}                               # default target port for swCurl
+KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}  # optional: swCurl sorts JSON bodies with it
 
 
 # =============================================================================
@@ -80,73 +72,6 @@ function swAwaitPort()
 
 # =============================================================================
 #
-# swBrokerStart - start the broker
-#
-# $1: role (default: CB) - allows multiple broker instances
-#
-# Extra args are passed to the broker binary.
-#
-function swBrokerStart()
-{
-  local role=${1:-CB}
-  shift 2>/dev/null
-  local extraParams="$* $SW_BROKER_EXTRA_PARAMS"
-
-  local port=$SW_BROKER_PORT
-  local pidFile=$SW_BROKER_PID_FILE
-  local logDir=$SW_BROKER_LOG_DIR
-
-  # Support multiple instances
-  if [ "$role" == "CB2" ]; then
-    port=${SW_BROKER_PORT2:-9091}
-    pidFile="/tmp/swBroker2.pid"
-  fi
-
-  # Kill any leftover instance on this port
-  swBrokerStop $role
-
-  # Start broker
-  $SW_BROKER -port $port -logDir $logDir $extraParams &
-  local pid=$!
-  echo $pid > $pidFile
-
-  # Wait for broker to be ready
-  swAwaitPort $port 5
-  return $?
-}
-
-
-# =============================================================================
-#
-# swBrokerStop - stop the broker
-#
-# $1: role (default: CB)
-#
-function swBrokerStop()
-{
-  local role=${1:-CB}
-
-  local pidFile=$SW_BROKER_PID_FILE
-  local port=$SW_BROKER_PORT
-
-  if [ "$role" == "CB2" ]; then
-    pidFile="/tmp/swBroker2.pid"
-    port=${SW_BROKER_PORT2:-9091}
-  fi
-
-  if [ -f "$pidFile" ]; then
-    local pid=$(cat $pidFile)
-    kill $pid 2>/dev/null
-    sleep 0.2
-    # Force kill if still alive
-    kill -0 $pid 2>/dev/null && kill -9 $pid 2>/dev/null
-    rm -f $pidFile
-  fi
-}
-
-
-# =============================================================================
-#
 # swCurl - send an HTTP request and print status line + headers + body
 #
 # Usage:
@@ -156,8 +81,8 @@ function swBrokerStop()
 #
 function swCurl()
 {
-  local _host=$SW_BROKER_HOST
-  local _port=$SW_BROKER_PORT
+  local _host=$SW_HOST
+  local _port=$SW_PORT
   local _url=""
   local _method=""
   local _payload=""
@@ -243,7 +168,7 @@ function swCurl()
   tail -n +2 /tmp/swCurlHeaders.out | tr -d '\r' | grep -v "^$"
   echo ""
 
-  # Sort JSON object keys for deterministic output across DB backends.
+  # Sort JSON object keys for deterministic output across backends.
   # kjson outputs a trailing newline; raw body does not, so add one via echo.
   if [ -n "$KJSON" ] && [ -s /tmp/swCurlBody.out ]; then
     $KJSON -sort < /tmp/swCurlBody.out 2>/dev/null | head -c -1 || cat /tmp/swCurlBody.out
