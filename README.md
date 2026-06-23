@@ -210,7 +210,7 @@ binary drives wildly different projects without changes.
 | **swTest** | The runner (this README). |
 | **swDiff** | The comparison engine — diffs captured stdout against `--EXPECT--`, honoring `REGEX(...)` and `#SORT` blocks. Invoked by swTest; usable standalone: `swDiff -r expected.txt -i actual.txt`. |
 | **swDiffGui** | Graphical side-by-side viewer for a failing comparison. |
-| **swRegenExpect** | Backs `--regen`: rewrites a test's `--EXPECT--` from its latest captured `.out`, applying volatility rules (timestamps, lengths, version strings → `REGEX(...)`) so regenerated expectations stay robust. |
+| **swRegenExpect** | Backs `--regen`: rewrites a test's `--EXPECT--` from its latest captured `.out`. The bundled version fills the block **verbatim** (then you hand-edit volatile lines into `REGEX(...)`). A repo can supply its own output-aware regenerator at `test/funcTests/tools/swRegenExpect` (or via `SW_REGEN_TOOL`) — `--regen` prefers it and wraps volatile tokens automatically. |
 
 ## Artifacts (on failure)
 

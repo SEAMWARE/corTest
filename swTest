@@ -499,10 +499,14 @@ function runTest()
     echo "  RUN exited with code $runExit"
     rc=8
   elif [ "$regen" == "on" ]; then
-    # Author mode: fill the --EXPECT-- block from the just-captured output,
-    # applying the volatility transforms (Date -> REGEX, timestamps, etc.).
+    # Author mode: fill the --EXPECT-- block from the just-captured output.
+    # Prefer a repo-provided regen tool (which can apply program-specific
+    # volatility transforms — timestamps, ids, etc.); fall back to swTest's
+    # generic verbatim fill. Override the path via SW_REGEN_TOOL.
     vMsg "  Regenerating EXPECT ..."
-    $SCRIPT_HOME/swRegenExpect "$base"
+    regenTool="${SW_REGEN_TOOL:-${REPO_ROOT}/test/funcTests/tools/swRegenExpect}"
+    [ -x "$regenTool" ] || regenTool="$SCRIPT_HOME/swRegenExpect"
+    "$regenTool" "$base"
   else
     vMsg "  Comparing output ..."
     $SCRIPT_HOME/swDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
