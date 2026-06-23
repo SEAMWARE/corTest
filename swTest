@@ -145,6 +145,7 @@ function usage()
   echo "$empty [--toIx <N>]                   (stop at test index N)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
+  echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors)"
   echo "$empty [<file.test> | <directory>]... (default: cases/)"
 
   # Repo-injected parameters
@@ -554,6 +555,7 @@ fromIx=0
 toIx=0
 tagsFilter=""
 skipTagsFilter=""
+valgrind=off
 declare -a fileArgs
 
 while [ "$#" != 0 ]
@@ -574,6 +576,7 @@ do
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
+  elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export SW_VALGRIND=1;
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
   elif [ -f "test/funcTests/cases/$1" ]; then fileArgs+=("test/funcTests/cases/$1");
   elif [ -f "test/funcTests/cases/$1.test" ]; then fileArgs+=("test/funcTests/cases/$1.test");
@@ -725,6 +728,13 @@ for testFile in $testFiles; do
 
   startTime=$(( $(date +%s%N) / 1000000 ))
 
+  # Valgrind (--vt): per-test log base, consumed by swBrokerStart for the CB
+  # (--log-file=<base>.<pid>.vg). Clear any stale logs from a previous run.
+  if [ "$valgrind" == "on" ]; then
+    export SW_VALGRIND_LOG="/tmp/swValgrind.$(basename "$testFile" .test)"
+    \rm -f "${SW_VALGRIND_LOG}".*.vg 2>/dev/null
+  fi
+
   # Retry loop
   result=1
   for tryNo in $(seq 1 $maxTries); do
@@ -739,6 +749,19 @@ for testFile in $testFiles; do
       vMsg "  Retry $((tryNo + 1))/$maxTries ..."
     fi
   done
+
+  # Valgrind verdict: a functionally-passing test still FAILS if the CB's
+  # valgrind report shows any memory error or a definite/indirect leak.
+  # (Tests that never start the CB produce no .vg file — not a valgrind fail.)
+  if [ "$valgrind" == "on" ] && [ "$result" == 0 ]; then
+    vgFiles=( "${SW_VALGRIND_LOG}".*.vg )
+    if [ -e "${vgFiles[0]}" ]; then
+      if grep -hqE "ERROR SUMMARY: [1-9]" "${vgFiles[@]}" 2>/dev/null \
+         || grep -hE "(definitely|indirectly) lost:" "${vgFiles[@]}" 2>/dev/null | grep -qvE "lost: 0 bytes"; then
+        result=13
+      fi
+    fi
+  fi
 
   endTime=$(( $(date +%s%N) / 1000000 ))
   durationMs=$((endTime - startTime))
@@ -790,6 +813,7 @@ for testFile in $testFiles; do
       10) errorText="INIT: stderr not empty" ;;
       11) errorText="INIT: non-zero exit" ;;
       12) errorText="TEARDOWN error" ;;
+      13) errorText="valgrind: leak/error (see ${SW_VALGRIND_LOG}.*.vg)" ;;
       *)  errorText="error code $result" ;;
     esac
 
