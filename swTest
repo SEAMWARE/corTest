@@ -743,6 +743,28 @@ for testFile in $testFiles; do
     \rm -f "${SW_VALGRIND_LOG}".*.vg 2>/dev/null
   fi
 
+  # Print the index / name / dots NOW (no trailing newline) so live output
+  # (tail -f /tmp/sTest.out or the terminal) shows WHICH test is currently
+  # executing. The timing and PASS/FAIL result are appended to the same line
+  # when the test finishes. The E/L/F tally shown is "so far, before this test".
+  displayName=$(basename "$testFile" .test)
+  dirPart=$(dirname "$testFile")
+  parentDir=$(basename "$dirPart")
+  if [ "$parentDir" != "." ] && [ "$parentDir" != "/" ]; then
+    displayName="${parentDir}/${displayName}"
+  fi
+  if [ "$valgrind" == "on" ]; then
+    prefix=$(printf "%04d/%d (E:%d L:%d F:%d):" $testIx $totalTests $vgErrorCount $vgLeakCount $failCount)
+  else
+    prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
+  fi
+  textPart="$prefix $displayName "
+  textLen=${#textPart}
+  dotsNeeded=$((DOT_END_COL - textLen))
+  if [ $dotsNeeded -lt 3 ]; then dotsNeeded=3; fi
+  dots=$(printf '%*s' $dotsNeeded '' | tr ' ' '.')
+  printf "%s %s %s  " "$prefix" "$displayName" "$dots"
+
   # Retry loop
   result=1
   for tryNo in $(seq 1 $maxTries); do
@@ -805,44 +827,16 @@ for testFile in $testFiles; do
   durationSec=$((durationMs / 1000))
   durationFrac=$((durationMs % 1000))
 
-  # Build display name: relative path without .test suffix
-  displayName=$(basename "$testFile" .test)
-  dirPart=$(dirname "$testFile")
-  # If tests are in a subdirectory, show the last dir component
-  parentDir=$(basename "$dirPart")
-  if [ "$parentDir" != "." ] && [ "$parentDir" != "/" ]; then
-    displayName="${parentDir}/${displayName}"
-  fi
-
-  # Build prefix. Under --vt, show separate running tallies — E:memory-errors,
-  # L:leaks (both # of test cases), F:functional failures — like orion-ld's
-  # valgrindTestSuite. Otherwise the classic index/total/fails.
-  if [ "$valgrind" == "on" ]; then
-    prefix=$(printf "%04d/%d (E:%d L:%d F:%d):" $testIx $totalTests $vgErrorCount $vgLeakCount $failCount)
-  else
-    prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
-  fi
-
-  # Build suffix: N.NNNs
+  # prefix / displayName / dots were already printed (no trailing newline)
+  # before the test ran; here we only append the timing / result to that line.
   suffix=$(printf "%d.%03ds" $durationSec $durationFrac)
-
-  # Calculate dots needed (dots end at DOT_END_COL — same column as SKIP / FAIL)
-  textPart="$prefix $displayName "
-  textLen=${#textPart}
-  dotsNeeded=$((DOT_END_COL - textLen))
-  if [ $dotsNeeded -lt 3 ]; then
-    dotsNeeded=3
-  fi
-  dots=$(printf '%*s' $dotsNeeded '' | tr ' ' '.')
 
   if [ "$result" == 0 ]; then
     # --- PASS ---
-    # Surface possibly-lost (never fails the gate, but never silently ignored).
-    vgNote=""
-    if [ "$valgrind" == "on" ] && [ "${vgPossiblyBytes:-0}" -gt 0 ]; then
-      vgNote="  [poss-lost ${vgPossiblyBytes}B]"
-    fi
-    printf "%s %s %s  %s%s\n" "$prefix" "$displayName" "$dots" "$suffix" "$vgNote"
+    # NB: possibly-lost (the constant ~28KB kalloc-arena baseline) is intentionally
+    # NOT shown — it's identical on every line and not actionable. It still never
+    # fails the gate (only definite/indirect leaks do).
+    printf "%s\n" "$suffix"
     passCount=$((passCount + 1))
 
     if [ "$keepFiles" != "on" ]; then
@@ -861,17 +855,16 @@ for testFile in $testFiles; do
       10) errorText="INIT: stderr not empty" ;;
       11) errorText="INIT: non-zero exit" ;;
       12) errorText="TEARDOWN error" ;;
-      13) errorText=$(printf "valgrind: L=%dB E=%d" "${vgLostBytes:-0}" "${vgErrCtx:-0}")
-          [ "${vgPossiblyBytes:-0}" -gt 0 ] && errorText="$errorText poss=${vgPossiblyBytes}B"
+      13) errorText=$(printf "valgrind: L=%d E=%d" "${vgLostBytes:-0}" "${vgErrCtx:-0}")
           errorText="$errorText (see ${SW_VALGRIND_LOG}.*.vg)" ;;
       14) errorText="valgrind: report INCOMPLETE — broker killed before finish, cannot trust" ;;
       *)  errorText="error code $result" ;;
     esac
 
     if [ "$noColor" == "on" ]; then
-      printf "%s %s %s  FAIL: %s (%d.%03ds)\n" "$prefix" "$displayName" "$dots" "$errorText" $durationSec $durationFrac
+      printf "FAIL: %s (%d.%03ds)\n" "$errorText" $durationSec $durationFrac
     else
-      printf "%s %s %s  ${RED}FAIL: %s${NC} (%d.%03ds)\n" "$prefix" "$displayName" "$dots" "$errorText" $durationSec $durationFrac
+      printf "${RED}FAIL: %s${NC} (%d.%03ds)\n" "$errorText" $durationSec $durationFrac
     fi
 
     failCount=$((failCount + 1))
