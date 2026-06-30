@@ -126,6 +126,7 @@ function swCurl()
     jsonld)   curlArgs+=(-H "Accept: application/ld+json") ;;
     geojson)  curlArgs+=(-H "Accept: application/geo+json") ;;
     text)     curlArgs+=(-H "Accept: text/plain") ;;
+    raw)      ;;  # no Accept header (curl default */*) — for non-NGSI-LD endpoints (e.g. /metrics)
     *)        curlArgs+=(-H "Accept: application/json") ;;
   esac
 
@@ -170,7 +171,11 @@ function swCurl()
 
   # Sort JSON object keys for deterministic output across backends.
   # kjson outputs a trailing newline; raw body does not, so add one via echo.
-  if [ -n "$KJSON" ] && [ -s /tmp/swCurlBody.out ]; then
+  if [ "$_outFormat" == "text" ] || [ "$_outFormat" == "raw" ]; then
+    # Non-JSON response (e.g. Prometheus exposition) — emit the body verbatim;
+    # kjson -sort would silently eat it.
+    cat /tmp/swCurlBody.out
+  elif [ -n "$KJSON" ] && [ -s /tmp/swCurlBody.out ]; then
     $KJSON -sort < /tmp/swCurlBody.out 2>/dev/null | head -c -1 || cat /tmp/swCurlBody.out
   else
     cat /tmp/swCurlBody.out
