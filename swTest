@@ -143,6 +143,7 @@ function usage()
   echo "$empty [--noColor]                    (disable colored output)"
   echo "$empty [--fromIx <N>]                 (start from test index N)"
   echo "$empty [--toIx <N>]                   (stop at test index N)"
+  echo "$empty [-ix | --ix <spec>]            (run only these 1-based indices, e.g. 5-10,102,201-206)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
   echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors)"
@@ -207,6 +208,32 @@ function colorSkip()
 {
   if [ "$noColor" == "on" ]; then echo "SKIP";
   else echo -e "${YELLOW}SKIP${NC}"; fi
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# ixInSpec <n> - is 1-based index <n> selected by the -ix spec ($ixSpec)?
+#
+# $ixSpec is a comma-separated list of singletons and lo-hi ranges, e.g.
+# "5-10,102,201-206". Returns 0 if <n> falls in any of them. Only called when
+# $ixSpec is non-empty; useful for re-running scattered test neighbourhoods
+# (flake hunting) in a single pass.
+#
+function ixInSpec()
+{
+  local n="$1" part lo hi
+  local -a parts
+  IFS=',' read -ra parts <<< "$ixSpec"
+  for part in "${parts[@]}"; do
+    if [[ "$part" == *-* ]]; then
+      lo="${part%%-*}"; hi="${part##*-}"
+      if [ "$n" -ge "$lo" ] && [ "$n" -le "$hi" ]; then return 0; fi
+    elif [ "$n" -eq "$part" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 
@@ -559,6 +586,7 @@ noColor=off
 regen=off
 fromIx=0
 toIx=0
+ixSpec=""
 tagsFilter=""
 skipTagsFilter=""
 valgrind=off
@@ -580,6 +608,7 @@ do
   elif [ "$1" == "--noColor" ];     then noColor=on;
   elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
+  elif [ "$1" == "-ix" ] || [ "$1" == "--ix" ]; then ixSpec="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
   elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export SW_VALGRIND=1;
@@ -659,21 +688,25 @@ fi
 # Dry run: just list tests
 #
 if [ "$dryRun" == "on" ]; then
-  # Apply --tags filter in dryrun mode too so the listing matches what
-  # a real run would actually execute.
-  declare -a dryFiles
+  # Apply --tags and -ix filters in dryrun mode too so the listing matches what
+  # a real run would actually execute. The printed number is the true run index,
+  # so -ix values can be copied straight from a plain (unfiltered) listing.
+  declare -a dryFiles dryIx
+  ix=1
   for testFile in $testFiles; do
     if tagsFilterMatches "$testFile"; then
-      dryFiles+=("$testFile")
+      if [ -z "$ixSpec" ] || ixInSpec "$ix"; then
+        dryFiles+=("$testFile")
+        dryIx+=("$ix")
+      fi
+      ix=$((ix + 1))
     fi
   done
   echo "Found ${#dryFiles[@]} test(s)"
   if [ "$verbose" == "on" ]; then
-    ix=1
-    for testFile in "${dryFiles[@]}"; do
-      name=$(extractSection "NAME" "$testFile")
-      printf "  %3d. %-60s %s\n" $ix "$testFile" "$name"
-      ix=$((ix + 1))
+    for i in "${!dryFiles[@]}"; do
+      name=$(extractSection "NAME" "${dryFiles[$i]}")
+      printf "  %3d. %-60s %s\n" "${dryIx[$i]}" "${dryFiles[$i]}" "$name"
     done
   fi
   exit 0
@@ -707,6 +740,11 @@ for testFile in $testFiles; do
     continue
   fi
   if [ "$toIx" != 0 ] && [ $testIx -gt $toIx ]; then
+    testIx=$((testIx + 1))
+    continue
+  fi
+  # -ix: run only the listed 1-based indices (comma-separated ranges/singletons)
+  if [ -n "$ixSpec" ] && ! ixInSpec "$testIx"; then
     testIx=$((testIx + 1))
     continue
   fi
