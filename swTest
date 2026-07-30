@@ -34,8 +34,61 @@ cd - > /dev/null 2>&1
 
 export SCRIPT_HOME
 
-# Repo root is the current working directory (swTest must be run from repo root)
-REPO_ROOT=$(pwd)
+# -----------------------------------------------------------------------------
+#
+# Repo root
+#
+# swTest used to REQUIRE being started from the repo root, and forgetting that
+# was the entire reason the swBrokerTest wrapper existed. It now finds the root
+# itself:
+#
+#   1. the nearest ancestor of $PWD carrying test/funcTests/swTestFunctions.sh
+#      (so anywhere inside the repo works), else
+#   2. the repo owning the first test path on the command line (so an absolute
+#      path works from anywhere at all).
+#
+# Test paths given relative to the ORIGINAL cwd are resolved to absolute before
+# the cd, so they keep pointing at the same file.
+#
+repoRootOf()
+{
+  local dir="$1"
+
+  while [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "." ]; do
+    if [ -f "$dir/test/funcTests/swTestFunctions.sh" ]; then
+      echo "$dir"
+      return 0
+    fi
+    dir=$(dirname "$dir")
+  done
+
+  return 1
+}
+
+REPO_ROOT=$(repoRootOf "$(pwd)")
+
+if [ "$REPO_ROOT" == "" ]; then
+  # Not inside a test repo — try the repo that owns a path argument, and make
+  # every existing path argument absolute so it survives the cd below.
+  _swArgs=()
+  for _a in "$@"; do
+    if [ -e "$_a" ]; then
+      _a=$(cd "$(dirname "$_a")" >/dev/null 2>&1 && printf '%s/%s' "$(pwd)" "$(basename "$_a")")
+      [ "$REPO_ROOT" == "" ] && REPO_ROOT=$(repoRootOf "$(dirname "$_a")")
+    fi
+    _swArgs+=("$_a")
+  done
+  set -- "${_swArgs[@]}"
+fi
+
+if [ "$REPO_ROOT" == "" ]; then
+  echo "swTest: no test repo here — run it inside one (a directory whose"
+  echo "        test/funcTests/swTestFunctions.sh exists), or name a test by"
+  echo "        absolute path."
+  exit 1
+fi
+
+cd "$REPO_ROOT"
 export REPO_ROOT
 
 # Repo-specific test functions file
@@ -47,6 +100,59 @@ export SW_TEST_FUNCTIONS
 # Repo-specific CLI parameters file
 # Sourced before argument parsing so repos can inject custom options
 SW_TEST_PARAMS="${SW_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/swTestParams.sh}"
+
+
+# -----------------------------------------------------------------------------
+#
+# Orphan reaping + follow file
+#
+# Two suites can never coexist (they share the broker port), so a fresh launch
+# wins and anything left over from a previous run is reaped here. This is the
+# real protection: even a run that was SIGKILLed (its trap never ran) leaves
+# orphans that the NEXT run cleans up. The INT/TERM traps take the brokers down
+# with us instead of orphaning them.
+#
+# ftClient is the SAME binary in both stacks, so it is reaped BY PORT RANGE
+# (sw owns 77xx, fw owns 78xx) — a bare `killall ftClient` here would shoot the
+# fw suite's mocks mid-run, and it used to.
+#
+# /tmp/sTest.out is the "follow any running test" file — truncated per run and
+# UNBUFFERED, so `tail -f` shows which test is running as it happens.
+#
+swTestReap()
+{
+  # A stale ENGINE from a previous run. Never ourselves or our caller: this
+  # script's own command line matches "swTest/swTest", so a bare pkill -f would
+  # shoot the run doing the reaping.
+  local pid
+  for pid in $(pgrep -f "swTest/swTest" 2>/dev/null); do
+    [ "$pid" == "$$" ]     && continue
+    [ "$pid" == "$PPID" ]  && continue
+    kill -9 "$pid" 2>/dev/null
+  done
+
+  pkill -9 -f "valgrind.*swBroker"      2>/dev/null
+  killall -9 swBroker                   2>/dev/null
+  pkill -9 -f "ftClient.*--port 77"     2>/dev/null
+  return 0
+}
+
+if [ "$SW_TEST_NO_REAP" != "on" ]; then
+  swTestReap
+  sleep 0.3   # let the ports release
+
+  trap 'swTestReap; exit 130' INT
+  trap 'swTestReap; exit 143' TERM
+fi
+
+SW_TEST_FOLLOW="${SW_TEST_FOLLOW:-/tmp/sTest.out}"
+if [ "$SW_TEST_FOLLOW" != "off" ]; then
+  {
+    echo "---------- SW Test Suite -------"
+    echo "swTest $*"
+  } > "$SW_TEST_FOLLOW"
+  exec > >(stdbuf -o0 tee -a "$SW_TEST_FOLLOW") 2>&1
+fi
 
 
 # -----------------------------------------------------------------------------
