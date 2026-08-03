@@ -161,8 +161,33 @@ function swCurl()
   # Dump headers to file
   curlArgs+=(-D /tmp/swCurlHeaders.out)
 
+  #
+  # Both scratch files are REMOVED first, and that is not tidiness.
+  # -D only writes when curl actually gets a response, so a curl that fails
+  # outright (a URL it will not accept, connection refused, ...) used to leave
+  # the PREVIOUS request's dump in place — and the test then printed those
+  # stale headers as if they were this request's answer. A request that never
+  # happened would sail through with the last one's 201, so the test passed
+  # while proving nothing. Now the file is simply absent and the step prints
+  # the curl failure instead, which the expect will not match.
+  #
+  \rm -f /tmp/swCurlHeaders.out /tmp/swCurlBody.out
+
   # Execute
   curl "${curlArgs[@]}" "$fullUrl" > /tmp/swCurlBody.out 2>/dev/null
+  local _curlRc=$?
+
+  #
+  # Say so, loudly and in the test's own output. curl's stderr is discarded
+  # (it is noisy and non-deterministic), so without this the only symptom
+  # would be an empty step - and "empty" is much harder to read than a named
+  # failure. Exit 3 is the one that bit us: unescaped [ ] in a URL, which curl
+  # reads as a glob range.
+  #
+  if [ $_curlRc != 0 ]; then
+    echo "swCurl: curl failed (exit $_curlRc) for $fullUrl"
+    return 1
+  fi
 
   # Output: HTTP status line + headers + empty line + body
   head -1 /tmp/swCurlHeaders.out | tr -d '\r'
