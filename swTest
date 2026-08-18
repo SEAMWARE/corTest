@@ -255,6 +255,7 @@ function usage()
   echo "$empty [--toIx <N>]                   (stop at test index N)"
   echo "$empty [-ix | --ix <spec>]            (run only these 1-based indices, e.g. 5-10,102,201-206)"
   echo "$empty [--skip <spec>]                (run all BUT these indices, same grammar - reported as skipped)"
+  echo "$empty [--skipNames <list>]          (skip these test NAMES; default \$SWTEST_SKIP, for a standing list)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
   echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors)"
@@ -343,6 +344,42 @@ function specHasIx()
       return 0
     fi
   done
+  return 1
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# nameInSkipList <testFile> - is this test named in $skipNames?
+#
+# $skipNames (default: $SWTEST_SKIP, so it can live in a .bashrc) is a list of
+# test names separated by whitespace and/or commas. A name is the file name,
+# with or without the .test suffix, and with an OPTIONAL single directory level
+# in front - the same identifier the runner prints, so an entry can be copied
+# straight out of a log:
+#
+#   export SWTEST_SKIP="troe_timescale_temporal_q_deep cases/subscription_pernot"
+#
+# Names, not indices: an index list rots the moment a test is added, and this
+# one is meant to survive in a shell profile. Shell globs work.
+#
+function nameInSkipList()
+{
+  local testFile="$1" entry name dirName display
+
+  [ -z "$skipNames" ] && return 1
+
+  name=$(basename "$testFile" .test)
+  dirName=$(basename "$(dirname "$testFile")")
+  display="$dirName/$name"
+
+  for entry in ${skipNames//,/ }; do
+    entry="${entry%.test}"
+    if [[ "$name" == $entry ]] || [[ "$display" == $entry ]]; then
+      return 0
+    fi
+  done
+
   return 1
 }
 
@@ -780,6 +817,7 @@ fromIx=0
 toIx=0
 ixSpec=""
 skipSpec=""
+skipNames="$SWTEST_SKIP"      # standing skip list, by name - see nameInSkipList
 tagsFilter=""
 skipTagsFilter=""
 valgrind=off
@@ -803,6 +841,7 @@ do
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
   elif [ "$1" == "-ix" ] || [ "$1" == "--ix" ]; then ixSpec="$2"; shift;
   elif [ "$1" == "--skip" ];                        then skipSpec="$2"; shift;
+  elif [ "$1" == "--skipNames" ];                   then skipNames="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
   elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export SW_VALGRIND=1;
@@ -964,6 +1003,14 @@ for testFile in $testFiles; do
   #
   if [ -n "$skipSpec" ] && specHasIx "$skipSpec" "$testIx"; then
     SKIP_REASON="--skip $skipSpec"
+    reportSkip "$testFile"
+    continue
+  fi
+
+  # The operator's standing skip list, by name (SWTEST_SKIP / --skipNames).
+  # Same decision as --skip, just a lasting one, so it reports the same way.
+  if nameInSkipList "$testFile"; then
+    SKIP_REASON="skip list"
     reportSkip "$testFile"
     continue
   fi
