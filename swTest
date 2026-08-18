@@ -254,6 +254,7 @@ function usage()
   echo "$empty [--fromIx <N>]                 (start from test index N)"
   echo "$empty [--toIx <N>]                   (stop at test index N)"
   echo "$empty [-ix | --ix <spec>]            (run only these 1-based indices, e.g. 5-10,102,201-206)"
+  echo "$empty [--skip <spec>]                (run all BUT these indices, same grammar - reported as skipped)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
   echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors)"
@@ -323,18 +324,17 @@ function colorSkip()
 
 # -----------------------------------------------------------------------------
 #
-# ixInSpec <n> - is 1-based index <n> selected by the -ix spec ($ixSpec)?
+# specHasIx <spec> <n> - does 1-based index <n> fall inside <spec>?
 #
-# $ixSpec is a comma-separated list of singletons and lo-hi ranges, e.g.
-# "5-10,102,201-206". Returns 0 if <n> falls in any of them. Only called when
-# $ixSpec is non-empty; useful for re-running scattered test neighbourhoods
-# (flake hunting) in a single pass.
+# <spec> is a comma-separated list of singletons and lo-hi ranges, e.g.
+# "5-10,102,201-206". Shared by -ix (run ONLY these) and --skip (run all but
+# these), which take the same grammar from opposite ends.
 #
-function ixInSpec()
+function specHasIx()
 {
-  local n="$1" part lo hi
+  local spec="$1" n="$2" part lo hi
   local -a parts
-  IFS=',' read -ra parts <<< "$ixSpec"
+  IFS=',' read -ra parts <<< "$spec"
   for part in "${parts[@]}"; do
     if [[ "$part" == *-* ]]; then
       lo="${part%%-*}"; hi="${part##*-}"
@@ -344,6 +344,38 @@ function ixInSpec()
     fi
   done
   return 1
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# reportSkip <testFile> - print the SKIP line for a test and count it
+#
+# For a test that WAS part of this run and is being passed over: SKIP_<TAG>, or
+# the operator's own --skip. $SKIP_REASON says which. Advances $testIx; the
+# caller continues the loop.
+#
+function reportSkip()
+{
+  local testFile="$1"
+  local displayName dirPart parentDir prefix skipMsg textPart textLen dotsNeeded dots
+
+  displayName=$(basename "$testFile" .test)
+  dirPart=$(dirname "$testFile")
+  parentDir=$(basename "$dirPart")
+  if [ "$parentDir" != "." ] && [ "$parentDir" != "/" ]; then
+    displayName="${parentDir}/${displayName}"
+  fi
+  prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
+  skipMsg=$(colorSkip)
+  textPart="$prefix $displayName "
+  textLen=${#textPart}
+  dotsNeeded=$((DOT_END_COL - textLen))
+  if [ $dotsNeeded -lt 3 ]; then dotsNeeded=3; fi
+  dots=$(printf '%*s' $dotsNeeded '' | tr ' ' '.')
+  printf "%s %s %s  %s (%s)\n" "$prefix" "$displayName" "$dots" "$skipMsg" "$SKIP_REASON"
+  skipCount=$((skipCount + 1))
+  testIx=$((testIx + 1))
 }
 
 
@@ -747,6 +779,7 @@ regen=off
 fromIx=0
 toIx=0
 ixSpec=""
+skipSpec=""
 tagsFilter=""
 skipTagsFilter=""
 valgrind=off
@@ -769,6 +802,7 @@ do
   elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
   elif [ "$1" == "--toIx" ];        then toIx="$2"; shift;
   elif [ "$1" == "-ix" ] || [ "$1" == "--ix" ]; then ixSpec="$2"; shift;
+  elif [ "$1" == "--skip" ];                        then skipSpec="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
   elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export SW_VALGRIND=1;
@@ -838,14 +872,11 @@ fi
 # Drop the test cases that do not apply to this configuration (REQUIRE_<TAG>),
 # here, before totalTests is counted. They are not part of this run - counting
 # them and then reporting them as "skipped" would understate a clean run.
-naCount=0
+# Silently - a test that does not apply to this configuration is not news.
 naFiltered=""
 for tf in $testFiles; do
   if testApplies "$tf"; then
     naFiltered="$naFiltered$tf"$'\n'
-  else
-    naCount=$((naCount + 1))
-    vMsg "not applicable, left out of this run: $tf ($NA_REASON)"
   fi
 done
 testFiles=$(echo "$naFiltered" | sed '/^$/d')
@@ -870,7 +901,7 @@ if [ "$dryRun" == "on" ]; then
   ix=1
   for testFile in $testFiles; do
     if tagsFilterMatches "$testFile"; then
-      if [ -z "$ixSpec" ] || ixInSpec "$ix"; then
+      if [ -z "$ixSpec" ] || specHasIx "$ixSpec" "$ix"; then
         dryFiles+=("$testFile")
         dryIx+=("$ix")
       fi
@@ -919,31 +950,29 @@ for testFile in $testFiles; do
     continue
   fi
   # -ix: run only the listed 1-based indices (comma-separated ranges/singletons)
-  if [ -n "$ixSpec" ] && ! ixInSpec "$testIx"; then
+  if [ -n "$ixSpec" ] && ! specHasIx "$ixSpec" "$testIx"; then
     testIx=$((testIx + 1))
+    continue
+  fi
+
+  #
+  # --skip: the operator deliberately leaving out tests that DO apply and WOULD
+  # otherwise run. That is a decision about this run, and a run that left 19
+  # cases out must say so - most of all in a log somebody reads later. Reported
+  # and counted as skipped, unlike -ix/--match/--tags, which SELECT what the run
+  # is about, and unlike REQUIRE_, where there was never anything to leave out.
+  #
+  if [ -n "$skipSpec" ] && specHasIx "$skipSpec" "$testIx"; then
+    SKIP_REASON="--skip $skipSpec"
+    reportSkip "$testFile"
     continue
   fi
 
   # --tags filtering is applied up front (before totalTests is counted)
 
-  # SKIP_<TAG> / REQUIRE_<TAG> filtering
+  # SKIP_<TAG>: the test applies, but is skipped for this parameter value
   if shouldSkipTest "$testFile"; then
-    displayName=$(basename "$testFile" .test)
-    dirPart=$(dirname "$testFile")
-    parentDir=$(basename "$dirPart")
-    if [ "$parentDir" != "." ] && [ "$parentDir" != "/" ]; then
-      displayName="${parentDir}/${displayName}"
-    fi
-    prefix=$(printf "%04d/%d/%d:" $testIx $totalTests $failCount)
-    skipMsg=$(colorSkip)
-    textPart="$prefix $displayName "
-    textLen=${#textPart}
-    dotsNeeded=$((DOT_END_COL - textLen))
-    if [ $dotsNeeded -lt 3 ]; then dotsNeeded=3; fi
-    dots=$(printf '%*s' $dotsNeeded '' | tr ' ' '.')
-    printf "%s %s %s  %s (%s)\n" "$prefix" "$displayName" "$dots" "$skipMsg" "$SKIP_REASON"
-    skipCount=$((skipCount + 1))
-    testIx=$((testIx + 1))
+    reportSkip "$testFile"
     continue
   fi
 

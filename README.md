@@ -177,6 +177,7 @@ swTest path/to/some.test            # run an explicit file
 swTest --match parse                # only tests whose name matches a grep pattern
 swTest --tags geo,slow              # only tests whose --TAGS-- intersect the set
 swTest --skip-tags slow             # everything except those tags
+swTest --skip 4,89-107,516          # everything except those indices (says so in the output)
 swTest --fromIx 10 --toIx 20        # run an index range
 swTest --dryrun                     # list what would run, run nothing
 swTest --regen cases/new.test       # fill an empty --EXPECT-- from captured output
@@ -191,6 +192,8 @@ swTest --regen cases/new.test       # fill an empty --EXPECT-- from captured out
 | `--tags <csv>` | Only run tests whose `--TAGS--` intersect the list |
 | `--skip-tags <csv>` | Skip tests whose `--TAGS--` intersect the list |
 | `--fromIx <N>` / `--toIx <N>` | Run an index range |
+| `-ix \| --ix <spec>` | Run only these 1-based indices, e.g. `5-10,102,201-206` |
+| `--skip <spec>` | Run all BUT these indices, same grammar — **reported and counted as skipped** |
 | `--keep` | Keep per-test output files even on success |
 | `--dryrun` | List the selected tests without running them |
 | `--stopOnError` | Stop at the first failing test |
