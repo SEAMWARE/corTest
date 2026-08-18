@@ -63,6 +63,22 @@ Human-readable test name        (required)
 # optional whitespace/again-separated tags for --tags / --skip-tags selection
 ```
 
+A test file can also carry, as a comment anywhere in it:
+
+```
+# REQUIRE_<TAG>: val1 val2     the test only APPLIES when that CLI param currently
+#                             holds one of these values
+# SKIP_<TAG>:    val1 val2     the test applies, but is SKIPPED for these values
+```
+
+These answer two different questions and are kept apart on purpose. A `REQUIRE_`
+that is not met means the test is not a candidate for this run at all — it is
+dropped from the run list before the total is counted, so a clean run reads
+"613 tests: 613 passed" and not "618 tests: 613 passed, 5 skipped". Nobody
+decided to pass on those five; they simply do not apply to the chosen database.
+`SKIP_` is the other thing: a test that does apply and is being passed over, which
+is worth reporting as such.
+
 `--INIT--`, `--RUN--` and `--TEARDOWN--` are executed with `bash`, so they can use
 shell freely — and any helper functions the repo exposes (see below).
 

@@ -166,7 +166,7 @@ fi
 #   SW_CLI_PARAM_VARS[i]     - variable name, e.g. "SW_DB_TYPE"
 #   SW_CLI_PARAM_DEFAULTS[i] - default value, e.g. "ramdb"
 #   SW_CLI_PARAM_DESCS[i]    - description for usage output
-#   SW_CLI_PARAM_TAGS[i]     - tag for SKIP_/REQUIRE_ markers, e.g. "DB"
+#   SW_CLI_PARAM_TAGS[i]     - tag for REQUIRE_/SKIP_ markers, e.g. "DB"
 #
 declare -a SW_CLI_PARAM_NAMES
 declare -a SW_CLI_PARAM_VARS
@@ -181,7 +181,9 @@ declare -a SW_CLI_PARAM_TAGS
 # $2: variable name    (e.g. "SW_DB_TYPE")
 # $3: default value    (e.g. "ramdb")
 # $4: description      (e.g. "Current-state DB plugin (ramdb|mongoc)")
-# $5: skip/require tag (e.g. "DB" => test files use SKIP_DB: / REQUIRE_DB:)
+# $5: applicability/skip tag (e.g. "DB" => test files use REQUIRE_DB: / SKIP_DB:).
+#     REQUIRE_ decides whether a test is part of the run at all; SKIP_ skips one
+#     that is. Two questions, two mechanisms - see testApplies / shouldSkipTest.
 #
 function swCliParamAdd()
 {
@@ -347,13 +349,63 @@ function ixInSpec()
 
 # -----------------------------------------------------------------------------
 #
-# shouldSkipTest - check REQUIRE_<TAG> / SKIP_<TAG> markers in a test file
+# testApplies - does this test case apply to the configuration being run?
+#
+#   # REQUIRE_<TAG>: val1 val2 ...   (the test only applies when the current
+#                                     value of that CLI param is in the list)
+#
+# Returns 0 if the test applies, 1 if it does not (sets NA_REASON).
+#
+# NOT the same thing as skipping, and deliberately not the same mechanism: a
+# ramdb-only test on a mongoc run was never a candidate to begin with. Nobody
+# decided to pass on it, so it is filtered out before the run set is counted -
+# it is not part of this run at all, and reporting it as "skipped" would have
+# made "580 passed of 585" out of "580 tests, all green".
+#
+function testApplies()
+{
+  local testFile="$1"
+  NA_REASON=""
+
+  for ix in "${!SW_CLI_PARAM_TAGS[@]}"; do
+    local tag="${SW_CLI_PARAM_TAGS[$ix]}"
+    if [ -z "$tag" ]; then continue; fi
+
+    local varName="${SW_CLI_PARAM_VARS[$ix]}"
+    local currentValue
+    eval "currentValue=\"\${$varName}\""
+
+    if [ "$currentValue" == "NONE" ]; then continue; fi
+
+    local requireLine
+    requireLine=$(grep "^# *REQUIRE_${tag}:" "$testFile" 2>/dev/null | head -1)
+    if [ -n "$requireLine" ]; then
+      local values="${requireLine#*:}"
+      values=$(echo $values)  # trim whitespace
+      local found=false
+      for v in $values; do
+        if [ "$v" == "$currentValue" ]; then found=true; break; fi
+      done
+      if [ "$found" != "true" ]; then
+        NA_REASON="does not apply to ${tag}=${currentValue}"
+        return 1
+      fi
+    fi
+  done
+
+  return 0
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# shouldSkipTest - check SKIP_<TAG> markers in a test file
 #
 # For each registered CLI param that has a tag, grep the test file for:
-#   # REQUIRE_<TAG>: val1 val2 ...   (only run if current value is in the list)
 #   # SKIP_<TAG>: val1 val2 ...      (skip if current value is in the list)
 #
 # Returns 0 if test should be skipped (sets SKIP_REASON), 1 if it should run.
+# Applicability (REQUIRE_<TAG>) is a different question - see testApplies.
 #
 function shouldSkipTest()
 {
@@ -370,22 +422,6 @@ function shouldSkipTest()
 
     # Skip check not applicable if param was not set
     if [ "$currentValue" == "NONE" ]; then continue; fi
-
-    # Check REQUIRE_<TAG>
-    local requireLine
-    requireLine=$(grep "^# *REQUIRE_${tag}:" "$testFile" 2>/dev/null | head -1)
-    if [ -n "$requireLine" ]; then
-      local values="${requireLine#*:}"
-      values=$(echo $values)  # trim whitespace
-      local found=false
-      for v in $values; do
-        if [ "$v" == "$currentValue" ]; then found=true; break; fi
-      done
-      if [ "$found" != "true" ]; then
-        SKIP_REASON="requires ${tag}=${values// /|}"
-        return 0
-      fi
-    fi
 
     # Check SKIP_<TAG>
     local skipLine
@@ -798,6 +834,21 @@ if [ -n "$tagsFilter" ] || [ -n "$skipTagsFilter" ]; then
   done
   testFiles=$(echo "$filtered" | sed '/^$/d')
 fi
+
+# Drop the test cases that do not apply to this configuration (REQUIRE_<TAG>),
+# here, before totalTests is counted. They are not part of this run - counting
+# them and then reporting them as "skipped" would understate a clean run.
+naCount=0
+naFiltered=""
+for tf in $testFiles; do
+  if testApplies "$tf"; then
+    naFiltered="$naFiltered$tf"$'\n'
+  else
+    naCount=$((naCount + 1))
+    vMsg "not applicable, left out of this run: $tf ($NA_REASON)"
+  fi
+done
+testFiles=$(echo "$naFiltered" | sed '/^$/d')
 
 totalTests=$(echo "$testFiles" | grep -c '.')
 
