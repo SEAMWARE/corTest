@@ -52,7 +52,12 @@ Human-readable test name        (required)
 # the expected stdout. Supports REGEX(...) and #SORT_START/#SORT_END.  (required)
 
 --TEARDOWN--
-# shell commands run after the test (cleanup). Optional.
+# shell commands run after the test (cleanup).
+# The MARKER is required, its content is not: a test file with no --TEARDOWN--
+# is malformed and is refused before it runs. A test that leaves a server or a
+# database behind and never says so leaks that state into every test after it,
+# where it surfaces as somebody else's flake — so "nothing to tear down" has to
+# be stated, by leaving the section empty, rather than omitted.
 
 --TAGS--
 # optional whitespace/again-separated tags for --tags / --skip-tags selection

@@ -17,7 +17,9 @@
 #   Expected output (supports REGEX() and #SORT_START/#SORT_END)
 #
 #   --TEARDOWN--
-#   Cleanup commands (run after test)
+#   Cleanup commands (run after test). The MARKER IS MANDATORY - a test file
+#   without it is malformed and is refused before it runs. Leave the section
+#   empty when there is genuinely nothing to tear down.
 #
 
 # -----------------------------------------------------------------------------
@@ -510,6 +512,21 @@ function fileCreation()
     return 5
   fi
 
+  #
+  # The --TEARDOWN-- MARKER is mandatory, its content is not. A test that leaves
+  # something running (a broker, a client, a database) and never says so does not
+  # just fail itself - it leaks that state into every test after it, where the
+  # damage shows up as somebody else's flake. Requiring the marker makes "nothing
+  # to tear down" a deliberate, visible statement instead of an omission.
+  #
+  # This also catches a malformed file produced by --regen: an EXPECT block that
+  # swallowed the sections below it.
+  #
+  if ! grep -q '^--TEARDOWN--$' "$testFile"; then
+    echo "Error: --TEARDOWN-- section missing in $testFile (the marker is mandatory; leave it empty if there is nothing to tear down)"
+    return 6
+  fi
+
   # Make shell scripts executable
   chmod 755 "$prefix.init"     2>/dev/null
   chmod 755 "$prefix.run"      2>/dev/null
@@ -557,6 +574,7 @@ function fileCleanup()
 #
 # Returns:
 #   0  - pass
+#   6  - malformed test file (no --TEARDOWN-- section)
 #   7  - RUN stderr not empty
 #   8  - RUN non-zero exit
 #   9  - output mismatch
@@ -993,6 +1011,7 @@ for testFile in $testFiles; do
     local_prefix="$local_dir/$local_base"
 
     case $result in
+      6)  errorText="malformed test file: no --TEARDOWN-- section" ;;
       7)  errorText="RUN: stderr not empty" ;;
       8)  errorText="RUN: non-zero exit" ;;
       9)  errorText="output mismatch" ;;
