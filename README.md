@@ -15,7 +15,7 @@ single shared harness across the cor/k library family, replacing earlier ad-hoc
 per-library runners.
 
 - **Language:** bash (+ Python 3 for the diff/regen tooling)
-- **License:** Copyright 2026 Seamware
+- **License:** [Apache License 2.0](LICENSE) — Copyright 2026 Seamware
 
 ## How it works
 

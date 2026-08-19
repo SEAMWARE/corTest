@@ -1,4 +1,5 @@
 # Copyright 2026 Seamware
+# SPDX-License-Identifier: Apache-2.0
 #
 # corTestFunctions.sh - Generic helper functions for corTest functional tests
 #
