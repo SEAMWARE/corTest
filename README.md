@@ -11,7 +11,7 @@ no language binding in the core. It drives a CLI tool reading JSON files, a daem
 poked over curl, a compiler emitting diagnostics — anything you can launch from a
 shell line that writes to stdout. Each consuming repo plugs in its own helper
 functions and options (see [Per-repo extension](#per-repo-extension)). It is the
-single shared harness across the sw/k library family, replacing earlier ad-hoc
+single shared harness across the cor/k library family, replacing earlier ad-hoc
 per-library runners.
 
 - **Language:** bash (+ Python 3 for the diff/regen tooling)

@@ -115,7 +115,7 @@ COR_TEST_PARAMS="${COR_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/corTestParams.sh
 # with us instead of orphaning them.
 #
 # ftClient is the SAME binary in both stacks, so it is reaped BY PORT RANGE
-# (sw owns 77xx, fw owns 78xx) — a bare `killall ftClient` here would shoot the
+# (Coraine owns 77xx, fw owns 78xx) — a bare `killall ftClient` here would shoot the
 # fw suite's mocks mid-run, and it used to.
 #
 # /tmp/sTest.out is the "follow any running test" file — truncated per run and
