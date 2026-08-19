@@ -114,9 +114,9 @@ COR_TEST_PARAMS="${COR_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/corTestParams.sh
 # orphans that the NEXT run cleans up. The INT/TERM traps take the brokers down
 # with us instead of orphaning them.
 #
-# ftClient is the SAME binary in both stacks, so it is reaped BY PORT RANGE
-# (Coraine owns 77xx, fw owns 78xx) — a bare `killall ftClient` here would shoot the
-# fw suite's mocks mid-run, and it used to.
+# ftClient is the SAME binary in every suite this harness drives, so it is
+# reaped BY PORT RANGE (Coraine owns 77xx) — a bare `killall ftClient` here
+# would shoot a concurrently running suite's mocks mid-run, and it used to.
 #
 # /tmp/sTest.out is the "follow any running test" file — truncated per run and
 # UNBUFFERED, so `tail -f` shows which test is running as it happens.
