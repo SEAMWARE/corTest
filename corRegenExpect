@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Generic --EXPECT-- regenerator for swTest.
+Generic --EXPECT-- regenerator for corTest.
 
 Fills a test's --EXPECT-- block verbatim from its captured .out content. This
-is the repo-agnostic default used by `swTest --regen` when the consuming repo
+is the repo-agnostic default used by `corTest --regen` when the consuming repo
 does NOT provide its own regen tool.
 
 Output-aware smart regeneration (wrapping process-/run-volatile tokens in
 REGEX(...) so regenerated expectations stay stable) is inherently specific to
-the program under test, so it lives in the consuming repo, not here. swTest's
+the program under test, so it lives in the consuming repo, not here. corTest's
 --regen prefers a repo-provided tool at:
 
-    test/funcTests/tools/swRegenExpect
+    test/funcTests/tools/corRegenExpect
 
 and only falls back to this verbatim version when that file is absent. After a
 verbatim regen, hand-edit any volatile lines (timestamps, ids, …) into
 REGEX(...) / #SORT blocks as needed.
 
-Usage: swRegenExpect <testBaseName> [<testBaseName> ...]
+Usage: corRegenExpect <testBaseName> [<testBaseName> ...]
   Reads test/funcTests/cases/<base>.out and rewrites the --EXPECT-- block of
   test/funcTests/cases/<base>.test.
 """

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2026 Seamware
 #
-# swDiff - Diff tool with REGEX and SORT support
+# corDiff - Diff tool with REGEX and SORT support
 #
 # Strategy:
 #   1. Run normal 'diff' first. If files are identical, we're done.
@@ -154,7 +154,7 @@ def read_lines(filepath):
         return [line.rstrip() for line in f.readlines()]
 
 
-def sw_diff(ref_file, input_file, verbose=False):
+def cor_diff(ref_file, input_file, verbose=False):
     """Main diff logic.
     Returns (DiffResult, had_sort_blocks: bool)."""
 
@@ -186,7 +186,7 @@ def sw_diff(ref_file, input_file, verbose=False):
 
 
 def main():
-    parser = ArgumentParser(description='swDiff - Diff tool with REGEX and SORT support')
+    parser = ArgumentParser(description='corDiff - Diff tool with REGEX and SORT support')
     parser.add_argument('-r', '--reference', required=True,
                         help='Reference file (expected output)')
     parser.add_argument('-i', '--input', required=True,
@@ -204,7 +204,7 @@ def main():
         print(f"Error: Input file '{args.input}' does not exist", file=sys.stderr)
         sys.exit(2)
 
-    result, had_sort = sw_diff(args.reference, args.input, args.verbose)
+    result, had_sort = cor_diff(args.reference, args.input, args.verbose)
 
     if args.json:
         import json

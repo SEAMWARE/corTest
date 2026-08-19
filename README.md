@@ -1,12 +1,12 @@
-# swTest — Generic Functional-Test Harness
+# corTest — Generic Functional-Test Harness
 
 A small, language-agnostic functional-test runner for **any program that takes
 input and produces output on stdout**. A test is a plain-text `.test` file with a
-command to run and the output you expect; swTest runs the command, captures stdout,
+command to run and the output you expect; corTest runs the command, captures stdout,
 and compares it against the expectation with a smart diff that understands
 **regex placeholders** and **order-independent blocks**.
 
-swTest is deliberately decoupled from what it tests — there is no HTTP, no broker,
+corTest is deliberately decoupled from what it tests — there is no HTTP, no broker,
 no language binding in the core. It drives a CLI tool reading JSON files, a daemon
 poked over curl, a compiler emitting diagnostics — anything you can launch from a
 shell line that writes to stdout. Each consuming repo plugs in its own helper
@@ -19,13 +19,13 @@ per-library runners.
 
 ## How it works
 
-1. You run `swTest` from a repo root. By default it discovers every `*.test` file
+1. You run `corTest` from a repo root. By default it discovers every `*.test` file
    under `test/funcTests/cases/`.
-2. For each test, swTest splits the file into its sections and writes them out as
+2. For each test, corTest splits the file into its sections and writes them out as
    temporary scripts: `--INIT--`, `--RUN--`, `--TEARDOWN--`.
 3. It runs `--INIT--` (setup), then `--RUN--` — capturing the command's **stdout**
    into a `.out` file.
-4. It compares `.out` against the `--EXPECT--` section using **swDiff** (regex- and
+4. It compares `.out` against the `--EXPECT--` section using **corDiff** (regex- and
    sort-aware), then runs `--TEARDOWN--` (cleanup).
 5. A green `OK` or red `FAIL: <reason>` is printed per test; the process exits `0`
    if everything passed, `1` otherwise.
@@ -114,7 +114,7 @@ The two combine — a `#SORT` block may contain `REGEX(...)` lines.
 
 ## A complete example
 
-This is swTest's own self-test (`cases/0001_basic/basic_echo.test`) — a fully
+This is corTest's own self-test (`cases/0001_basic/basic_echo.test`) — a fully
 generic test of nothing more than `echo` and `date`:
 
 ```
@@ -162,35 +162,35 @@ myjsontool test/data/empty-object.json
 {}
 ```
 
-No curl, no server — just input in, stdout out. That's the common case swTest is
+No curl, no server — just input in, stdout out. That's the common case corTest is
 built for.
 
 ## CLI usage
 
-Run from the repo root (swTest resolves paths relative to the current directory):
+Run from the repo root (corTest resolves paths relative to the current directory):
 
 ```sh
-swTest                              # run every test under test/funcTests/cases/
-swTest cases/0001_basic             # run a directory
-swTest basic_echo                   # run one test by name (… /cases/basic_echo.test)
-swTest path/to/some.test            # run an explicit file
-swTest --match parse                # only tests whose name matches a grep pattern
-swTest --tags geo,slow              # only tests whose --TAGS-- intersect the set
-swTest --skip-tags slow             # everything except those tags
-swTest --skip 4,89-107,516          # everything except those indices (says so in the output)
+corTest                              # run every test under test/funcTests/cases/
+corTest cases/0001_basic             # run a directory
+corTest basic_echo                   # run one test by name (… /cases/basic_echo.test)
+corTest path/to/some.test            # run an explicit file
+corTest --match parse                # only tests whose name matches a grep pattern
+corTest --tags geo,slow              # only tests whose --TAGS-- intersect the set
+corTest --skip-tags slow             # everything except those tags
+corTest --skip 4,89-107,516          # everything except those indices (says so in the output)
 
 # A standing skip list, by NAME - put it in .bashrc and it survives. Each entry is
 # a test file name, with or without .test, optionally prefixed by one directory
 # level - the same identifier the runner prints, so entries can be copied out of a
 # log. Whitespace and/or commas separate them, and globs work:
 
-export SWTEST_SKIP="troe_timescale_* cases/subscription_pernot"
+export CORTEST_SKIP="troe_timescale_* cases/subscription_pernot"
 
 # Names rather than indices on purpose: an index list rots the moment a test is
 # added, and this one is meant to outlive the run it was written for.
-swTest --fromIx 10 --toIx 20        # run an index range
-swTest --dryrun                     # list what would run, run nothing
-swTest --regen cases/new.test       # fill an empty --EXPECT-- from captured output
+corTest --fromIx 10 --toIx 20        # run an index range
+corTest --dryrun                     # list what would run, run nothing
+corTest --regen cases/new.test       # fill an empty --EXPECT-- from captured output
 ```
 
 ### Options
@@ -204,7 +204,7 @@ swTest --regen cases/new.test       # fill an empty --EXPECT-- from captured out
 | `--fromIx <N>` / `--toIx <N>` | Run an index range |
 | `-ix \| --ix <spec>` | Run only these 1-based indices, e.g. `5-10,102,201-206` |
 | `--skip <spec>` | Run all BUT these indices, same grammar — **reported and counted as skipped** |
-| `--skipNames <list>` | Skip these test *names* — **reported**; defaults to `$SWTEST_SKIP` |
+| `--skipNames <list>` | Skip these test *names* — **reported**; defaults to `$CORTEST_SKIP` |
 | `--keep` | Keep per-test output files even on success |
 | `--dryrun` | List the selected tests without running them |
 | `--stopOnError` | Stop at the first failing test |
@@ -219,33 +219,33 @@ swTest --regen cases/new.test       # fill an empty --EXPECT-- from captured out
 
 ## Per-repo extension
 
-swTest core stays generic; each consuming repo customizes it through two optional
+corTest core stays generic; each consuming repo customizes it through two optional
 files (resolved relative to the repo root, overridable via env var):
 
-- **`test/funcTests/swTestFunctions.sh`** (env: `SW_TEST_FUNCTIONS`) — shell
+- **`test/funcTests/corTestFunctions.sh`** (env: `COR_TEST_FUNCTIONS`) — shell
   functions sourced before each test, callable from `--INIT--` / `--RUN--` /
   `--TEARDOWN--`. This is where a repo puts the verbs its tests need — e.g. a
   helper to start the program under test, wait for a port, seed an input fixture,
   or hit an endpoint. (A network service might define `start`/`stop`/`curl`
   helpers here; a pure CLI tool may need none at all.)
-- **`test/funcTests/swTestParams.sh`** (env: `SW_TEST_PARAMS`) — lets the repo
-  inject its own `swTest` command-line options, by appending to the parallel
-  arrays `SW_CLI_PARAM_NAMES` / `SW_CLI_PARAM_VARS` / `SW_CLI_PARAM_DEFAULTS` /
-  `SW_CLI_PARAM_DESCS`. An unrecognized option is matched against these before
-  swTest errors out, and the supplied value is exported under the chosen variable
+- **`test/funcTests/corTestParams.sh`** (env: `COR_TEST_PARAMS`) — lets the repo
+  inject its own `corTest` command-line options, by appending to the parallel
+  arrays `COR_CLI_PARAM_NAMES` / `COR_CLI_PARAM_VARS` / `COR_CLI_PARAM_DEFAULTS` /
+  `COR_CLI_PARAM_DESCS`. An unrecognized option is matched against these before
+  corTest errors out, and the supplied value is exported under the chosen variable
   name for the test functions to read.
 
-Because everything repo-specific lives in those two files, the same `swTest`
+Because everything repo-specific lives in those two files, the same `corTest`
 binary drives wildly different projects without changes.
 
 ## Companion tools
 
 | Tool | Purpose |
 |------|---------|
-| **swTest** | The runner (this README). |
-| **swDiff** | The comparison engine — diffs captured stdout against `--EXPECT--`, honoring `REGEX(...)` and `#SORT` blocks. Invoked by swTest; usable standalone: `swDiff -r expected.txt -i actual.txt`. |
-| **swDiffGui** | Graphical side-by-side viewer for a failing comparison. |
-| **swRegenExpect** | Backs `--regen`: rewrites a test's `--EXPECT--` from its latest captured `.out`. The bundled version fills the block **verbatim** (then you hand-edit volatile lines into `REGEX(...)`). A repo can supply its own output-aware regenerator at `test/funcTests/tools/swRegenExpect` (or via `SW_REGEN_TOOL`) — `--regen` prefers it and wraps volatile tokens automatically. |
+| **corTest** | The runner (this README). |
+| **corDiff** | The comparison engine — diffs captured stdout against `--EXPECT--`, honoring `REGEX(...)` and `#SORT` blocks. Invoked by corTest; usable standalone: `corDiff -r expected.txt -i actual.txt`. |
+| **corDiffGui** | Graphical side-by-side viewer for a failing comparison. |
+| **corRegenExpect** | Backs `--regen`: rewrites a test's `--EXPECT--` from its latest captured `.out`. The bundled version fills the block **verbatim** (then you hand-edit volatile lines into `REGEX(...)`). A repo can supply its own output-aware regenerator at `test/funcTests/tools/corRegenExpect` (or via `COR_REGEN_TOOL`) — `--regen` prefers it and wraps volatile tokens automatically. |
 
 ## Artifacts (on failure)
 
@@ -255,7 +255,7 @@ git-ignored):
 | File | Contents |
 |------|----------|
 | `<test>.out` | Captured stdout of `--RUN--` |
-| `<test>.diff` | The swDiff output (what didn't match) |
+| `<test>.diff` | The corDiff output (what didn't match) |
 | `<test>.run.stderr` | stderr of the `--RUN--` section |
 | `<test>.init.stderr` / `<test>.teardown.stderr` | stderr of setup / cleanup |
 
@@ -278,16 +278,16 @@ skip.
 
 ## Installation
 
-swTest is shipped/installed by the `swLibs` umbrella (`make install` copies
-`swTest`, `swDiff`, `swDiffGui` and `swTestFunctions.sh` into `swLibs/bin/`). To use
+corTest is shipped/installed by the `corLibs` umbrella (`make install` copies
+`corTest`, `corDiff`, `corDiffGui` and `corTestFunctions.sh` into `corLibs/bin/`). To use
 it directly, put the repo on your `PATH` or symlink the runner:
 
 ```sh
-ln -s "$PWD/swTest" /usr/local/bin/swTest
+ln -s "$PWD/corTest" /usr/local/bin/corTest
 ```
 
 ## Dependencies
 
 - **bash** 4+
-- **Python 3** — for `swDiff` (smart comparison) and `swRegenExpect`
-- A graphical toolkit only if you use **swDiffGui**
+- **Python 3** — for `corDiff` (smart comparison) and `corRegenExpect`
+- A graphical toolkit only if you use **corDiffGui**

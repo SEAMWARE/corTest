@@ -1,17 +1,17 @@
 # Copyright 2026 Seamware
 #
-# swTestFunctions.sh - Generic helper functions for swTest functional tests
+# corTestFunctions.sh - Generic helper functions for corTest functional tests
 #
 # Sourced by test scripts (--INIT--, --RUN--, --TEARDOWN-- sections).
-# The test harness (swTest) sources this file before running each test.
+# The test harness (corTest) sources this file before running each test.
 #
 # These helpers are repo-agnostic. Repo-specific helpers (starting the program
 # under test, database setup, etc.) belong in the consuming repo's own
-# test/funcTests/swTestFunctions.sh, not here.
+# test/funcTests/corTestFunctions.sh, not here.
 #
 # Functions:
-#   HTTP:    swCurl    - send a request, print status line + headers + body
-#   Utility: swLog, swAwaitPort, swSleep
+#   HTTP:    corCurl    - send a request, print status line + headers + body
+#   Utility: corLog, corAwaitPort, corSleep
 #
 
 
@@ -19,26 +19,26 @@
 #
 # Guard: source only once
 #
-if [ "$SW_TEST_FUNCTIONS_SOURCED" == "YES" ]; then
+if [ "$COR_TEST_FUNCTIONS_SOURCED" == "YES" ]; then
   return 0
 fi
-export SW_TEST_FUNCTIONS_SOURCED="YES"
+export COR_TEST_FUNCTIONS_SOURCED="YES"
 
 
 # =============================================================================
 #
 # Defaults - override via environment
 #
-SW_HOST=${SW_HOST:-"localhost"}                        # default target host for swCurl
-SW_PORT=${SW_PORT:-1026}                               # default target port for swCurl
-KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}  # optional: swCurl sorts JSON bodies with it
+COR_HOST=${COR_HOST:-"localhost"}                        # default target host for corCurl
+COR_PORT=${COR_PORT:-1026}                               # default target port for corCurl
+KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}  # optional: corCurl sorts JSON bodies with it
 
 
 # =============================================================================
 #
-# swLog - log a message (to stderr so it doesn't pollute test output)
+# corLog - log a message (to stderr so it doesn't pollute test output)
 #
-function swLog()
+function corLog()
 {
   echo "$(date '+%H:%M:%S') $*" >&2
 }
@@ -46,12 +46,12 @@ function swLog()
 
 # =============================================================================
 #
-# swAwaitPort - wait for a port to become available (up to N seconds)
+# corAwaitPort - wait for a port to become available (up to N seconds)
 #
 # $1: port
 # $2: max seconds (default: 5)
 #
-function swAwaitPort()
+function corAwaitPort()
 {
   local port=$1
   local maxWait=${2:-5}
@@ -65,24 +65,24 @@ function swAwaitPort()
     waited=$((waited + 1))
   done
 
-  echo "swAwaitPort: port $port not ready after ${maxWait}s" >&2
+  echo "corAwaitPort: port $port not ready after ${maxWait}s" >&2
   return 1
 }
 
 
 # =============================================================================
 #
-# swCurl - send an HTTP request and print status line + headers + body
+# corCurl - send an HTTP request and print status line + headers + body
 #
 # Usage:
-#   swCurl --url /path [-X METHOD] [--payload 'data'] [--port N]
+#   corCurl --url /path [-X METHOD] [--payload 'data'] [--port N]
 #          [--host H] [-H 'Header: value'] [--in json|jsonld]
 #          [--out json|jsonld|text]
 #
-function swCurl()
+function corCurl()
 {
-  local _host=$SW_HOST
-  local _port=$SW_PORT
+  local _host=$COR_HOST
+  local _port=$COR_PORT
   local _url=""
   local _method=""
   local _payload=""
@@ -108,7 +108,7 @@ function swCurl()
 
   # URL is mandatory
   if [ "$_url" == "" ]; then
-    echo "swCurl: missing --url" >&2
+    echo "corCurl: missing --url" >&2
     return 1
   fi
 
@@ -142,8 +142,8 @@ function swCurl()
     if [ -f "$_payload" ]; then
       curlArgs+=(-d "@$_payload")
     else
-      echo "$_payload" > /tmp/swCurlPayload
-      curlArgs+=(-d "@/tmp/swCurlPayload")
+      echo "$_payload" > /tmp/corCurlPayload
+      curlArgs+=(-d "@/tmp/corCurlPayload")
     fi
   fi
 
@@ -159,7 +159,7 @@ function swCurl()
   fi
 
   # Dump headers to file
-  curlArgs+=(-D /tmp/swCurlHeaders.out)
+  curlArgs+=(-D /tmp/corCurlHeaders.out)
 
   #
   # Both scratch files are REMOVED first, and that is not tidiness.
@@ -171,10 +171,10 @@ function swCurl()
   # while proving nothing. Now the file is simply absent and the step prints
   # the curl failure instead, which the expect will not match.
   #
-  \rm -f /tmp/swCurlHeaders.out /tmp/swCurlBody.out
+  \rm -f /tmp/corCurlHeaders.out /tmp/corCurlBody.out
 
   # Execute
-  curl "${curlArgs[@]}" "$fullUrl" > /tmp/swCurlBody.out 2>/dev/null
+  curl "${curlArgs[@]}" "$fullUrl" > /tmp/corCurlBody.out 2>/dev/null
   local _curlRc=$?
 
   #
@@ -185,13 +185,13 @@ function swCurl()
   # reads as a glob range.
   #
   if [ $_curlRc != 0 ]; then
-    echo "swCurl: curl failed (exit $_curlRc) for $fullUrl"
+    echo "corCurl: curl failed (exit $_curlRc) for $fullUrl"
     return 1
   fi
 
   # Output: HTTP status line + headers + empty line + body
-  head -1 /tmp/swCurlHeaders.out | tr -d '\r'
-  tail -n +2 /tmp/swCurlHeaders.out | tr -d '\r' | grep -v "^$"
+  head -1 /tmp/corCurlHeaders.out | tr -d '\r'
+  tail -n +2 /tmp/corCurlHeaders.out | tr -d '\r' | grep -v "^$"
   echo ""
 
   # Sort JSON object keys for deterministic output across backends.
@@ -199,11 +199,11 @@ function swCurl()
   if [ "$_outFormat" == "text" ] || [ "$_outFormat" == "raw" ]; then
     # Non-JSON response (e.g. Prometheus exposition) — emit the body verbatim;
     # kjson -sort would silently eat it.
-    cat /tmp/swCurlBody.out
-  elif [ -n "$KJSON" ] && [ -s /tmp/swCurlBody.out ]; then
-    $KJSON -sort < /tmp/swCurlBody.out 2>/dev/null | head -c -1 || cat /tmp/swCurlBody.out
+    cat /tmp/corCurlBody.out
+  elif [ -n "$KJSON" ] && [ -s /tmp/corCurlBody.out ]; then
+    $KJSON -sort < /tmp/corCurlBody.out 2>/dev/null | head -c -1 || cat /tmp/corCurlBody.out
   else
-    cat /tmp/swCurlBody.out
+    cat /tmp/corCurlBody.out
   fi
   echo
 }
@@ -211,15 +211,15 @@ function swCurl()
 
 # =============================================================================
 #
-# swSleep - sleep with a message (for debugging slow tests)
+# corSleep - sleep with a message (for debugging slow tests)
 #
-function swSleep()
+function corSleep()
 {
   local seconds=$1
   local reason=${2:-"waiting"}
 
-  if [ "$SW_VERBOSE" == "on" ]; then
-    swLog "sleeping ${seconds}s ($reason)"
+  if [ "$COR_VERBOSE" == "on" ]; then
+    corLog "sleeping ${seconds}s ($reason)"
   fi
   sleep $seconds
 }

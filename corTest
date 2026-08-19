@@ -1,7 +1,7 @@
 #!/bin/bash
 # Copyright 2026 Seamware
 #
-# swTest - Functional test harness
+# corTest - Functional test harness
 #
 # Test file format (.test):
 #   --NAME--
@@ -24,7 +24,7 @@
 
 # -----------------------------------------------------------------------------
 #
-# Find script home directory (where swTest lives)
+# Find script home directory (where corTest lives)
 #
 dirname=$(dirname $0)
 if [ "$dirname" == "" ]; then
@@ -40,11 +40,11 @@ export SCRIPT_HOME
 #
 # Repo root
 #
-# swTest used to REQUIRE being started from the repo root, and forgetting that
-# was the entire reason the swBrokerTest wrapper existed. It now finds the root
+# corTest used to REQUIRE being started from the repo root, and forgetting that
+# was the entire reason the coraineTest wrapper existed. It now finds the root
 # itself:
 #
-#   1. the nearest ancestor of $PWD carrying test/funcTests/swTestFunctions.sh
+#   1. the nearest ancestor of $PWD carrying test/funcTests/corTestFunctions.sh
 #      (so anywhere inside the repo works), else
 #   2. the repo owning the first test path on the command line (so an absolute
 #      path works from anywhere at all).
@@ -57,7 +57,7 @@ repoRootOf()
   local dir="$1"
 
   while [ -n "$dir" ] && [ "$dir" != "/" ] && [ "$dir" != "." ]; do
-    if [ -f "$dir/test/funcTests/swTestFunctions.sh" ]; then
+    if [ -f "$dir/test/funcTests/corTestFunctions.sh" ]; then
       echo "$dir"
       return 0
     fi
@@ -72,20 +72,20 @@ REPO_ROOT=$(repoRootOf "$(pwd)")
 if [ "$REPO_ROOT" == "" ]; then
   # Not inside a test repo — try the repo that owns a path argument, and make
   # every existing path argument absolute so it survives the cd below.
-  _swArgs=()
+  _corArgs=()
   for _a in "$@"; do
     if [ -e "$_a" ]; then
       _a=$(cd "$(dirname "$_a")" >/dev/null 2>&1 && printf '%s/%s' "$(pwd)" "$(basename "$_a")")
       [ "$REPO_ROOT" == "" ] && REPO_ROOT=$(repoRootOf "$(dirname "$_a")")
     fi
-    _swArgs+=("$_a")
+    _corArgs+=("$_a")
   done
-  set -- "${_swArgs[@]}"
+  set -- "${_corArgs[@]}"
 fi
 
 if [ "$REPO_ROOT" == "" ]; then
-  echo "swTest: no test repo here — run it inside one (a directory whose"
-  echo "        test/funcTests/swTestFunctions.sh exists), or name a test by"
+  echo "corTest: no test repo here — run it inside one (a directory whose"
+  echo "        test/funcTests/corTestFunctions.sh exists), or name a test by"
   echo "        absolute path."
   exit 1
 fi
@@ -94,14 +94,14 @@ cd "$REPO_ROOT"
 export REPO_ROOT
 
 # Repo-specific test functions file
-# Default: test/funcTests/swTestFunctions.sh (relative to repo root)
-# Override: SW_TEST_FUNCTIONS env var
-SW_TEST_FUNCTIONS="${SW_TEST_FUNCTIONS:-${REPO_ROOT}/test/funcTests/swTestFunctions.sh}"
-export SW_TEST_FUNCTIONS
+# Default: test/funcTests/corTestFunctions.sh (relative to repo root)
+# Override: COR_TEST_FUNCTIONS env var
+COR_TEST_FUNCTIONS="${COR_TEST_FUNCTIONS:-${REPO_ROOT}/test/funcTests/corTestFunctions.sh}"
+export COR_TEST_FUNCTIONS
 
 # Repo-specific CLI parameters file
 # Sourced before argument parsing so repos can inject custom options
-SW_TEST_PARAMS="${SW_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/swTestParams.sh}"
+COR_TEST_PARAMS="${COR_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/corTestParams.sh}"
 
 
 # -----------------------------------------------------------------------------
@@ -121,39 +121,39 @@ SW_TEST_PARAMS="${SW_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/swTestParams.sh}"
 # /tmp/sTest.out is the "follow any running test" file — truncated per run and
 # UNBUFFERED, so `tail -f` shows which test is running as it happens.
 #
-swTestReap()
+corTestReap()
 {
   # A stale ENGINE from a previous run. Never ourselves or our caller: this
-  # script's own command line matches "swTest/swTest", so a bare pkill -f would
+  # script's own command line matches "corTest/corTest", so a bare pkill -f would
   # shoot the run doing the reaping.
   local pid
-  for pid in $(pgrep -f "swTest/swTest" 2>/dev/null); do
+  for pid in $(pgrep -f "corTest/corTest" 2>/dev/null); do
     [ "$pid" == "$$" ]     && continue
     [ "$pid" == "$PPID" ]  && continue
     kill -9 "$pid" 2>/dev/null
   done
 
-  pkill -9 -f "valgrind.*swBroker"      2>/dev/null
-  killall -9 swBroker                   2>/dev/null
+  pkill -9 -f "valgrind.*coraine"      2>/dev/null
+  killall -9 coraine                   2>/dev/null
   pkill -9 -f "ftClient.*--port 77"     2>/dev/null
   return 0
 }
 
-if [ "$SW_TEST_NO_REAP" != "on" ]; then
-  swTestReap
+if [ "$COR_TEST_NO_REAP" != "on" ]; then
+  corTestReap
   sleep 0.3   # let the ports release
 
-  trap 'swTestReap; exit 130' INT
-  trap 'swTestReap; exit 143' TERM
+  trap 'corTestReap; exit 130' INT
+  trap 'corTestReap; exit 143' TERM
 fi
 
-SW_TEST_FOLLOW="${SW_TEST_FOLLOW:-/tmp/sTest.out}"
-if [ "$SW_TEST_FOLLOW" != "off" ]; then
+COR_TEST_FOLLOW="${COR_TEST_FOLLOW:-/tmp/sTest.out}"
+if [ "$COR_TEST_FOLLOW" != "off" ]; then
   {
-    echo "---------- SW Test Suite -------"
-    echo "swTest $*"
-  } > "$SW_TEST_FOLLOW"
-  exec > >(stdbuf -o0 tee -a "$SW_TEST_FOLLOW") 2>&1
+    echo "---------- Cor Test Suite -------"
+    echo "corTest $*"
+  } > "$COR_TEST_FOLLOW"
+  exec > >(stdbuf -o0 tee -a "$COR_TEST_FOLLOW") 2>&1
 fi
 
 
@@ -162,48 +162,48 @@ fi
 # Repo-injectable CLI parameters
 #
 # Arrays indexed in parallel:
-#   SW_CLI_PARAM_NAMES[i]    - option name, e.g. "-db"
-#   SW_CLI_PARAM_VARS[i]     - variable name, e.g. "SW_DB_TYPE"
-#   SW_CLI_PARAM_DEFAULTS[i] - default value, e.g. "ramdb"
-#   SW_CLI_PARAM_DESCS[i]    - description for usage output
-#   SW_CLI_PARAM_TAGS[i]     - tag for REQUIRE_/SKIP_ markers, e.g. "DB"
+#   COR_CLI_PARAM_NAMES[i]    - option name, e.g. "-db"
+#   COR_CLI_PARAM_VARS[i]     - variable name, e.g. "COR_DB_TYPE"
+#   COR_CLI_PARAM_DEFAULTS[i] - default value, e.g. "ramdb"
+#   COR_CLI_PARAM_DESCS[i]    - description for usage output
+#   COR_CLI_PARAM_TAGS[i]     - tag for REQUIRE_/SKIP_ markers, e.g. "DB"
 #
-declare -a SW_CLI_PARAM_NAMES
-declare -a SW_CLI_PARAM_VARS
-declare -a SW_CLI_PARAM_DEFAULTS
-declare -a SW_CLI_PARAM_DESCS
-declare -a SW_CLI_PARAM_TAGS
+declare -a COR_CLI_PARAM_NAMES
+declare -a COR_CLI_PARAM_VARS
+declare -a COR_CLI_PARAM_DEFAULTS
+declare -a COR_CLI_PARAM_DESCS
+declare -a COR_CLI_PARAM_TAGS
 
 #
-# swCliParamAdd - register a custom CLI parameter
+# corCliParamAdd - register a custom CLI parameter
 #
 # $1: option name      (e.g. "-db")
-# $2: variable name    (e.g. "SW_DB_TYPE")
+# $2: variable name    (e.g. "COR_DB_TYPE")
 # $3: default value    (e.g. "ramdb")
 # $4: description      (e.g. "Current-state DB plugin (ramdb|mongoc)")
 # $5: applicability/skip tag (e.g. "DB" => test files use REQUIRE_DB: / SKIP_DB:).
 #     REQUIRE_ decides whether a test is part of the run at all; SKIP_ skips one
 #     that is. Two questions, two mechanisms - see testApplies / shouldSkipTest.
 #
-function swCliParamAdd()
+function corCliParamAdd()
 {
-  local ix=${#SW_CLI_PARAM_NAMES[@]}
-  SW_CLI_PARAM_NAMES[$ix]="$1"
-  SW_CLI_PARAM_VARS[$ix]="$2"
-  SW_CLI_PARAM_DEFAULTS[$ix]="$3"
-  SW_CLI_PARAM_DESCS[$ix]="$4"
-  SW_CLI_PARAM_TAGS[$ix]="$5"
+  local ix=${#COR_CLI_PARAM_NAMES[@]}
+  COR_CLI_PARAM_NAMES[$ix]="$1"
+  COR_CLI_PARAM_VARS[$ix]="$2"
+  COR_CLI_PARAM_DEFAULTS[$ix]="$3"
+  COR_CLI_PARAM_DESCS[$ix]="$4"
+  COR_CLI_PARAM_TAGS[$ix]="$5"
 }
 
 # Source repo params file (registers custom CLI options)
-if [ -f "$SW_TEST_PARAMS" ]; then
-  source "$SW_TEST_PARAMS"
+if [ -f "$COR_TEST_PARAMS" ]; then
+  source "$COR_TEST_PARAMS"
 fi
 
 # Apply defaults for all registered params (NONE means "not set")
-for ix in "${!SW_CLI_PARAM_NAMES[@]}"; do
-  local_var="${SW_CLI_PARAM_VARS[$ix]}"
-  local_default="${SW_CLI_PARAM_DEFAULTS[$ix]}"
+for ix in "${!COR_CLI_PARAM_NAMES[@]}"; do
+  local_var="${COR_CLI_PARAM_VARS[$ix]}"
+  local_default="${COR_CLI_PARAM_DEFAULTS[$ix]}"
   if [ "$local_default" == "NONE" ]; then
     eval "export ${local_var}=\"\${${local_var}:-NONE}\""
   else
@@ -216,7 +216,7 @@ done
 #
 # Logging
 #
-LOG_FILE=/tmp/swTest.log
+LOG_FILE=/tmp/corTest.log
 
 function logMsg()
 {
@@ -241,7 +241,7 @@ function usage()
   empty=$(echo $sfile | tr 'a-zA-Z/0-9.:' ' ')
   echo "$sfile [-u (usage)]"
   echo "$empty [-v (verbose)]"
-  echo "$empty [-g]                           (GUI diff on failure, using swDiffGui)"
+  echo "$empty [-g]                           (GUI diff on failure, using corDiffGui)"
   echo "$empty [--filter <pattern>]           (default: *.test)"
   echo "$empty [--match <grep-pattern>]       (filter test names)"
   echo "$empty [--keep]                       (keep output files on success)"
@@ -255,17 +255,17 @@ function usage()
   echo "$empty [--toIx <N>]                   (stop at test index N)"
   echo "$empty [-ix | --ix <spec>]            (run only these 1-based indices, e.g. 5-10,102,201-206)"
   echo "$empty [--skip <spec>]                (run all BUT these indices, same grammar - reported as skipped)"
-  echo "$empty [--skipNames <list>]          (skip these test NAMES; default \$SWTEST_SKIP, for a standing list)"
+  echo "$empty [--skipNames <list>]          (skip these test NAMES; default \$CORTEST_SKIP, for a standing list)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
   echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors)"
   echo "$empty [<file.test> | <directory>]... (default: cases/)"
 
   # Repo-injected parameters
-  for ix in "${!SW_CLI_PARAM_NAMES[@]}"; do
-    local_name="${SW_CLI_PARAM_NAMES[$ix]}"
-    local_desc="${SW_CLI_PARAM_DESCS[$ix]}"
-    local_default="${SW_CLI_PARAM_DEFAULTS[$ix]}"
+  for ix in "${!COR_CLI_PARAM_NAMES[@]}"; do
+    local_name="${COR_CLI_PARAM_NAMES[$ix]}"
+    local_desc="${COR_CLI_PARAM_DESCS[$ix]}"
+    local_default="${COR_CLI_PARAM_DEFAULTS[$ix]}"
     local_padding=$((28 - ${#local_name} - ${#local_desc}))
     if [ $local_padding -lt 1 ]; then local_padding=1; fi
     if [ "$local_default" == "NONE" ]; then
@@ -352,13 +352,13 @@ function specHasIx()
 #
 # nameInSkipList <testFile> - is this test named in $skipNames?
 #
-# $skipNames (default: $SWTEST_SKIP, so it can live in a .bashrc) is a list of
+# $skipNames (default: $CORTEST_SKIP, so it can live in a .bashrc) is a list of
 # test names separated by whitespace and/or commas. A name is the file name,
 # with or without the .test suffix, and with an OPTIONAL single directory level
 # in front - the same identifier the runner prints, so an entry can be copied
 # straight out of a log:
 #
-#   export SWTEST_SKIP="troe_timescale_temporal_q_deep cases/subscription_pernot"
+#   export CORTEST_SKIP="troe_timescale_temporal_q_deep cases/subscription_pernot"
 #
 # Names, not indices: an index list rots the moment a test is added, and this
 # one is meant to survive in a shell profile. Shell globs work.
@@ -436,11 +436,11 @@ function testApplies()
   local testFile="$1"
   NA_REASON=""
 
-  for ix in "${!SW_CLI_PARAM_TAGS[@]}"; do
-    local tag="${SW_CLI_PARAM_TAGS[$ix]}"
+  for ix in "${!COR_CLI_PARAM_TAGS[@]}"; do
+    local tag="${COR_CLI_PARAM_TAGS[$ix]}"
     if [ -z "$tag" ]; then continue; fi
 
-    local varName="${SW_CLI_PARAM_VARS[$ix]}"
+    local varName="${COR_CLI_PARAM_VARS[$ix]}"
     local currentValue
     eval "currentValue=\"\${$varName}\""
 
@@ -481,11 +481,11 @@ function shouldSkipTest()
   local testFile="$1"
   SKIP_REASON=""
 
-  for ix in "${!SW_CLI_PARAM_TAGS[@]}"; do
-    local tag="${SW_CLI_PARAM_TAGS[$ix]}"
+  for ix in "${!COR_CLI_PARAM_TAGS[@]}"; do
+    local tag="${COR_CLI_PARAM_TAGS[$ix]}"
     if [ -z "$tag" ]; then continue; fi
 
-    local varName="${SW_CLI_PARAM_VARS[$ix]}"
+    local varName="${COR_CLI_PARAM_VARS[$ix]}"
     local currentValue
     eval "currentValue=\"\${$varName}\""
 
@@ -606,7 +606,7 @@ function fileCreation()
 
   # In --regen mode the EXPECT is (re)generated from the captured output, so an
   # empty --EXPECT-- block is expected — only the marker itself must be present
-  # (swRegenExpect anchors on it). Otherwise EXPECT is mandatory.
+  # (corRegenExpect anchors on it). Otherwise EXPECT is mandatory.
   if [ ! -s "$prefix.expect" ] && [ "$regen" != "on" ]; then
     echo "Error: --EXPECT-- section missing or empty in $testFile"
     return 5
@@ -667,9 +667,9 @@ function fileCleanup()
 
   # Valgrind logs (--vt) live in /tmp, keyed on the test base name. Like the
   # other artifacts they are removed on PASS and kept on FAIL — so a leftover
-  # /tmp/swValgrind.<test>.*.vg marks a test that leaked, just as a leftover
+  # /tmp/corValgrind.<test>.*.vg marks a test that leaked, just as a leftover
   # .diff marks one that mismatched.
-  rm -f "/tmp/swValgrind.$base".*.vg
+  rm -f "/tmp/corValgrind.$base".*.vg
 }
 
 
@@ -703,12 +703,12 @@ function runTest()
   fi
 
   # --- Source helper functions into generated scripts ---
-  # Line 2: swTest's own helper functions (swCurl, swBrokerStart, etc.)
-  # Line 3: repo-specific functions (swBrokerTestInit.sh or equivalent)
-  local srcLine="source $SCRIPT_HOME/swTestFunctions.sh"
+  # Line 2: corTest's own helper functions (corCurl, coraineStart, etc.)
+  # Line 3: repo-specific functions (coraineTestInit.sh or equivalent)
+  local srcLine="source $SCRIPT_HOME/corTestFunctions.sh"
   local repoSrcLine=""
-  if [ -f "$SW_TEST_FUNCTIONS" ]; then
-    repoSrcLine="source $SW_TEST_FUNCTIONS"
+  if [ -f "$COR_TEST_FUNCTIONS" ]; then
+    repoSrcLine="source $COR_TEST_FUNCTIONS"
   fi
   for part in init run teardown; do
     if [ -s "$prefix.$part" ]; then
@@ -764,15 +764,15 @@ function runTest()
   elif [ "$regen" == "on" ]; then
     # Author mode: fill the --EXPECT-- block from the just-captured output.
     # Prefer a repo-provided regen tool (which can apply program-specific
-    # volatility transforms — timestamps, ids, etc.); fall back to swTest's
-    # generic verbatim fill. Override the path via SW_REGEN_TOOL.
+    # volatility transforms — timestamps, ids, etc.); fall back to corTest's
+    # generic verbatim fill. Override the path via COR_REGEN_TOOL.
     vMsg "  Regenerating EXPECT ..."
-    regenTool="${SW_REGEN_TOOL:-${REPO_ROOT}/test/funcTests/tools/swRegenExpect}"
-    [ -x "$regenTool" ] || regenTool="$SCRIPT_HOME/swRegenExpect"
+    regenTool="${COR_REGEN_TOOL:-${REPO_ROOT}/test/funcTests/tools/corRegenExpect}"
+    [ -x "$regenTool" ] || regenTool="$SCRIPT_HOME/corRegenExpect"
     "$regenTool" "$base"
   else
     vMsg "  Comparing output ..."
-    $SCRIPT_HOME/swDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
+    $SCRIPT_HOME/corDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
     if [ "$?" != 0 ]; then
       vMsg "  Output mismatch"
       rc=9
@@ -817,7 +817,7 @@ fromIx=0
 toIx=0
 ixSpec=""
 skipSpec=""
-skipNames="$SWTEST_SKIP"      # standing skip list, by name - see nameInSkipList
+skipNames="$CORTEST_SKIP"      # standing skip list, by name - see nameInSkipList
 tagsFilter=""
 skipTagsFilter=""
 valgrind=off
@@ -834,7 +834,7 @@ do
   elif [ "$1" == "--stopOnError" ]; then stopOnError=on;
   elif [ "$1" == "--maxTries" ];    then maxTries="$2"; shift;
   elif [ "$1" == "--regen" ];       then regen=on;
-  elif [ "$1" == "-g" ];            then diffTool="$SCRIPT_HOME/swDiffGui";
+  elif [ "$1" == "-g" ];            then diffTool="$SCRIPT_HOME/corDiffGui";
   elif [ "$1" == "--diffTool" ];    then diffTool="$2"; shift;
   elif [ "$1" == "--noColor" ];     then noColor=on;
   elif [ "$1" == "--fromIx" ];      then fromIx="$2"; shift;
@@ -844,16 +844,16 @@ do
   elif [ "$1" == "--skipNames" ];                   then skipNames="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
-  elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export SW_VALGRIND=1;
+  elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export COR_VALGRIND=1;
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
   elif [ -f "test/funcTests/cases/$1" ]; then fileArgs+=("test/funcTests/cases/$1");
   elif [ -f "test/funcTests/cases/$1.test" ]; then fileArgs+=("test/funcTests/cases/$1.test");
   else
     # Check repo-injected parameters
     matched=false
-    for ix in "${!SW_CLI_PARAM_NAMES[@]}"; do
-      if [ "$1" == "${SW_CLI_PARAM_NAMES[$ix]}" ]; then
-        eval "export ${SW_CLI_PARAM_VARS[$ix]}=\"$2\""
+    for ix in "${!COR_CLI_PARAM_NAMES[@]}"; do
+      if [ "$1" == "${COR_CLI_PARAM_NAMES[$ix]}" ]; then
+        eval "export ${COR_CLI_PARAM_VARS[$ix]}=\"$2\""
         shift
         matched=true
         break
@@ -962,7 +962,7 @@ fi
 #
 # Main loop
 #
-logMsg "=== swTest starting: $totalTests tests ==="
+logMsg "=== corTest starting: $totalTests tests ==="
 
 # Column where the dots end (same for PASS, FAIL, SKIP).
 # The status suffix (time / "SKIP (reason)" / "FAIL: ...") comes after.
@@ -1007,7 +1007,7 @@ for testFile in $testFiles; do
     continue
   fi
 
-  # The operator's standing skip list, by name (SWTEST_SKIP / --skipNames).
+  # The operator's standing skip list, by name (CORTEST_SKIP / --skipNames).
   # Same decision as --skip, just a lasting one, so it reports the same way.
   if nameInSkipList "$testFile"; then
     SKIP_REASON="skip list"
@@ -1025,11 +1025,11 @@ for testFile in $testFiles; do
 
   startTime=$(( $(date +%s%N) / 1000000 ))
 
-  # Valgrind (--vt): per-test log base, consumed by swBrokerStart for the CB
+  # Valgrind (--vt): per-test log base, consumed by coraineStart for the CB
   # (--log-file=<base>.<pid>.vg). Clear any stale logs from a previous run.
   if [ "$valgrind" == "on" ]; then
-    export SW_VALGRIND_LOG="/tmp/swValgrind.$(basename "$testFile" .test)"
-    \rm -f "${SW_VALGRIND_LOG}".*.vg 2>/dev/null
+    export COR_VALGRIND_LOG="/tmp/corValgrind.$(basename "$testFile" .test)"
+    \rm -f "${COR_VALGRIND_LOG}".*.vg 2>/dev/null
   fi
 
   # Print the index / name / dots NOW (no trailing newline) so live output
@@ -1083,7 +1083,7 @@ for testFile in $testFiles; do
   #   - possibly-lost is recorded for display but never fails the gate.
   vgLostBytes=0; vgErrCtx=0; vgPossiblyBytes=0
   if [ "$valgrind" == "on" ] && [ "$result" == 0 ]; then
-    vgFiles=( "${SW_VALGRIND_LOG}".*.vg )
+    vgFiles=( "${COR_VALGRIND_LOG}".*.vg )
     if [ -e "${vgFiles[0]}" ]; then
       # Completeness: every .vg must carry both summaries.
       vgComplete=yes
@@ -1146,7 +1146,7 @@ for testFile in $testFiles; do
       11) errorText="INIT: non-zero exit" ;;
       12) errorText="TEARDOWN error" ;;
       13) errorText=$(printf "valgrind: L=%d E=%d" "${vgLostBytes:-0}" "${vgErrCtx:-0}")
-          errorText="$errorText (see ${SW_VALGRIND_LOG}.*.vg)" ;;
+          errorText="$errorText (see ${COR_VALGRIND_LOG}.*.vg)" ;;
       14) errorText="valgrind: report INCOMPLETE — broker killed before finish, cannot trust" ;;
       *)  errorText="error code $result" ;;
     esac
@@ -1162,13 +1162,13 @@ for testFile in $testFiles; do
     failedReasons+=("$errorText")
 
     # Snapshot broker log files (one per role) alongside the test
-    # artifacts. swBrokerStart writes to /tmp/swBroker.<role>.log;
+    # artifacts. coraineStart writes to /tmp/coraine.<role>.log;
     # the next test's brokerStart would clobber them.
     # (This block runs at script top level, not in a function, so `local` is
     #  illegal here — _log/_role are plain loop temporaries.)
-    for _log in /tmp/swBroker.*.log; do
+    for _log in /tmp/coraine.*.log; do
       [ -f "$_log" ] || continue
-      _role=$(basename "$_log" .log | sed 's/^swBroker\.//')
+      _role=$(basename "$_log" .log | sed 's/^coraine\.//')
       cp "$_log" "$local_prefix.$_role.log"
     done
 
@@ -1232,9 +1232,9 @@ else
   else
     echo -e "$total tests: ${GREEN}$passCount passed${NC}, ${RED}$failCount failed${NC}${skipSuffix}${timeSuffix}"
   fi
-  logMsg "=== swTest finished: $failCount FAILURES ==="
+  logMsg "=== corTest finished: $failCount FAILURES ==="
   exit 1
 fi
 
-logMsg "=== swTest finished: all tests passed ==="
+logMsg "=== corTest finished: all tests passed ==="
 exit 0
