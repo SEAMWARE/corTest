@@ -56,14 +56,26 @@ function corAwaitPort()
 {
   local port=$1
   local maxWait=${2:-5}
-  local waited=0
+  local deadline=$(( $(date +%s) + maxWait ))
 
-  while [ $waited -lt $maxWait ]; do
-    if nc -z localhost $port 2>/dev/null; then
+  #
+  # bash's own /dev/tcp, not `nc`. Two reasons, both learned the hard way:
+  #
+  #   - netcat is not installed everywhere. In a container that lacks it,
+  #     `nc -z ... 2>/dev/null` is indistinguishable from a closed port, so
+  #     every single test fails with "port not ready" while the broker is up
+  #     and answering. That cost a full CI run to diagnose.
+  #   - /dev/tcp is a bash builtin: nothing to install, nothing to detect.
+  #
+  # The loop also counts REAL seconds now. It used to count iterations while
+  # sleeping 0.2s between them, so `corAwaitPort <port> 10` waited two seconds
+  # and called it ten - fine on an idle workstation, not on a loaded runner.
+  #
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
       return 0
     fi
     sleep 0.2
-    waited=$((waited + 1))
   done
 
   echo "corAwaitPort: port $port not ready after ${maxWait}s" >&2

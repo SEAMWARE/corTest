@@ -1172,6 +1172,31 @@ for testFile in $testFiles; do
       cp "$_log" "$local_prefix.$_role.log"
     done
 
+    #
+    # In CI there is no disk to go and look at afterwards: the runner is gone and
+    # the artifact only exists if the job got far enough to upload it. So print the
+    # evidence right here - the diff, and whatever the broker said - but ONLY in
+    # CI, because on a workstation this would bury a 600-test run in noise and the
+    # files are a `less` away.
+    #
+    if [ -n "$GITHUB_ACTIONS" ] || [ -n "$COR_TEST_DUMP_ON_FAIL" ]; then
+      if [ -s "$local_prefix.diff" ]; then
+        echo "----- $local_base: diff (first 40 lines) -----"
+        head -40 "$local_prefix.diff"
+      fi
+      for _dump in "$local_prefix".*.log; do
+        [ -s "$_dump" ] || continue
+        echo "----- $local_base: $(basename "$_dump") (first 20 lines) -----"
+        head -20 "$_dump"
+      done
+      for _dump in "$local_prefix.init.stderr" "$local_prefix.run.stderr" "$local_prefix.teardown.stderr"; do
+        [ -s "$_dump" ] || continue
+        echo "----- $local_base: $(basename "$_dump") -----"
+        head -20 "$_dump"
+      done
+      echo "----- $local_base: end -----"
+    fi
+
     if [ "$result" == 9 ] && [ "$diffTool" != "" ]; then
       $diffTool -r "$local_prefix.expect" -i "$local_prefix.out"
     fi
