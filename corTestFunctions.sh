@@ -32,7 +32,22 @@ export COR_TEST_FUNCTIONS_SOURCED="YES"
 #
 COR_HOST=${COR_HOST:-"localhost"}                        # default target host for corCurl
 COR_PORT=${COR_PORT:-1026}                               # default target port for corCurl
-KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}  # optional: corCurl sorts JSON bodies with it
+#
+# corCurl sorts JSON bodies with the kjson tool, so that member order - which is
+# insertion order, and none of a test's business - cannot fail a comparison. Every
+# expect in every suite was captured that way, which makes the tool a REQUIREMENT
+# and not an option: without it the bodies arrive unsorted and every JSON-bearing
+# test fails on member order alone. That is not a hypothetical - it is 611 of 612
+# tests failing in CI, with no hint as to why, because the absence was silent.
+#
+KJSON=${KJSON:-$(which kjson 2>/dev/null || echo "")}
+if [ -z "$KJSON" ]; then
+  echo "corTest: FATAL - the 'kjson' tool is not on PATH and KJSON is unset." >&2
+  echo "  corCurl sorts JSON response bodies with it, and every expect was captured sorted;" >&2
+  echo "  without it every JSON test fails on member order. Build the k-libs (kjson ships it" >&2
+  echo "  in its bin/) or point KJSON at the binary." >&2
+  exit 1
+fi
 
 
 # =============================================================================
