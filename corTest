@@ -1180,20 +1180,39 @@ for testFile in $testFiles; do
     # files are a `less` away.
     #
     if [ -n "$GITHUB_ACTIONS" ] || [ -n "$COR_TEST_DUMP_ON_FAIL" ]; then
-      if [ -s "$local_prefix.diff" ]; then
-        echo "----- $local_base: diff (first 40 lines) -----"
-        head -40 "$local_prefix.diff"
+      #
+      # What gets dumped follows WHAT FAILED. A valgrind failure (13/14) means the
+      # output was fine and the memory was not, so the diff has nothing to say - it
+      # printed "OK" under every leak, and the broker logs underneath it were the
+      # logs of a test that worked. Three screens of correct to explain one leak.
+      #
+      # For those the evidence is the valgrind summary: how many bytes, how many
+      # errors, and the first stack that lost something - which is the one thing
+      # that cannot be recovered afterwards, because the runner is gone.
+      #
+      if [ "$result" == 13 ] || [ "$result" == 14 ]; then
+        for _vg in "${COR_VALGRIND_LOG}".*.vg; do
+          [ -s "$_vg" ] || continue
+          echo "----- $local_base: valgrind -----"
+          grep -E "definitely lost|indirectly lost|ERROR SUMMARY" "$_vg" | sed 's/^/  /'
+          awk '/definitely lost in loss record/ {p=1} p {print; n++} n>14 {exit}' "$_vg" | sed 's/^/  /'
+        done
+      else
+        if [ -s "$local_prefix.diff" ]; then
+          echo "----- $local_base: diff (first 40 lines) -----"
+          head -40 "$local_prefix.diff"
+        fi
+        for _dump in "$local_prefix".*.log; do
+          [ -s "$_dump" ] || continue
+          echo "----- $local_base: $(basename "$_dump") (first 20 lines) -----"
+          head -20 "$_dump"
+        done
+        for _dump in "$local_prefix.init.stderr" "$local_prefix.run.stderr" "$local_prefix.teardown.stderr"; do
+          [ -s "$_dump" ] || continue
+          echo "----- $local_base: $(basename "$_dump") -----"
+          head -20 "$_dump"
+        done
       fi
-      for _dump in "$local_prefix".*.log; do
-        [ -s "$_dump" ] || continue
-        echo "----- $local_base: $(basename "$_dump") (first 20 lines) -----"
-        head -20 "$_dump"
-      done
-      for _dump in "$local_prefix.init.stderr" "$local_prefix.run.stderr" "$local_prefix.teardown.stderr"; do
-        [ -s "$_dump" ] || continue
-        echo "----- $local_base: $(basename "$_dump") -----"
-        head -20 "$_dump"
-      done
       echo "----- $local_base: end -----"
     fi
 
