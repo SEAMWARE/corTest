@@ -12,7 +12,7 @@
 #
 # Functions:
 #   HTTP:    corCurl    - send a request, print status line + headers + body
-#   Utility: corLog, corAwaitPort, corSleep
+#   Utility: corLog, corAwaitPort, corAwaitBody, corSleep
 #
 
 
@@ -94,6 +94,44 @@ function corAwaitPort()
   done
 
   echo "corAwaitPort: port $port not ready after ${maxWait}s" >&2
+  return 1
+}
+
+
+# =============================================================================
+#
+# corAwaitBody <maxSeconds> <url> <pattern> - wait until a GET's body matches
+#
+# corAwaitPort's sibling: same real-seconds deadline, same 0.2s tick, but the
+# thing polled is state the server REPORTS rather than the port it listens on.
+#
+# For the case a fixed sleep only guesses at - an assertion that reads state
+# written asynchronously, notification statistics above all. `sleep 1` is a bet
+# on the machine; this waits for the fact itself, and returns the moment it is
+# true, so a fast run pays nothing.
+#
+# SILENT on success, deliberately: it is meant to sit between a test's banner
+# and its assertion without adding a line to the expected output.
+#
+# On timeout it says so on stderr and returns 1, and the assertion that follows
+# then fails on its own merits - showing WHAT was missing rather than just
+# reporting that something timed out.
+#
+function corAwaitBody()
+{
+  local maxWait=$1
+  local url=$2
+  local pattern=$3
+  local deadline=$(( $(date +%s) + maxWait ))
+
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if corCurl --url "$url" 2>/dev/null | grep -q -- "$pattern"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  echo "corAwaitBody: $url never matched '$pattern' within ${maxWait}s" >&2
   return 1
 }
 
