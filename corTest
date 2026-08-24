@@ -1190,12 +1190,31 @@ for testFile in $testFiles; do
       # errors, and the first stack that lost something - which is the one thing
       # that cannot be recovered afterwards, because the runner is gone.
       #
-      if [ "$result" == 13 ] || [ "$result" == 14 ]; then
+      if [ "$result" == 13 ]; then
         for _vg in "${COR_VALGRIND_LOG}".*.vg; do
           [ -s "$_vg" ] || continue
           echo "----- $local_base: valgrind -----"
           grep -E "definitely lost|indirectly lost|ERROR SUMMARY" "$_vg" | sed 's/^/  /'
           awk '/definitely lost in loss record/ {p=1} p {print; n++} n>14 {exit}' "$_vg" | sed 's/^/  /'
+        done
+      elif [ "$result" == 14 ]; then
+        #
+        # An INCOMPLETE report has no leak lines and no ERROR SUMMARY - that is
+        # what makes it incomplete - so the leak grep above matches nothing and
+        # prints an empty block. That is exactly what a nightly produced: a hard
+        # failure, a header, a footer, and not one line of evidence, on a runner
+        # that no longer exists. What is wanted here is the opposite question:
+        # how far did the report GET, and what did the broker say on its way out.
+        #
+        for _vg in "${COR_VALGRIND_LOG}".*.vg; do
+          [ -e "$_vg" ] || continue
+          echo "----- $local_base: incomplete valgrind report $(basename "$_vg") ($(wc -c < "$_vg") bytes) -----"
+          tail -25 "$_vg" | sed 's/^/  /'
+        done
+        for _dump in "$local_prefix".*.log; do
+          [ -s "$_dump" ] || continue
+          echo "----- $local_base: $(basename "$_dump") (last 20 lines) -----"
+          tail -20 "$_dump"
         done
       else
         if [ -s "$local_prefix.diff" ]; then
