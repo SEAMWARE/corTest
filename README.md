@@ -79,6 +79,27 @@ decided to pass on those five; they simply do not apply to the chosen database.
 `SKIP_` is the other thing: a test that does apply and is being passed over, which
 is worth reporting as such.
 
+A third pair asks about the BINARY rather than the run:
+
+```
+# REQUIRE_FEATURE: A B          the test applies only if the build has ALL of them
+# SKIP_FEATURE:    A B          the test applies only if the build has NONE of them
+```
+
+Separate from `REQUIRE_<TAG>` because it is a different question with different
+matching. `REQUIRE_<TAG>` holds ONE current value and asks whether it is among
+the listed alternatives, so `REQUIRE_DB: corDB mongoc` means "either". A feature
+list is a SET, and `REQUIRE_FEATURE: A B` means a test that needs both — the
+opposite reading. `SKIP_FEATURE` is the direction a reduced build needs: a test
+asserting the 501 for an endpoint compiled out can only run where it is out.
+Both drop the test from the run list rather than reporting it skipped.
+
+The set comes from `COR_TEST_FEATURES`, space-separated, which the repo's
+`corTestParams.sh` sets — normally by asking the binary what it was built with.
+UNSET means the repo does not report features, and then both markers are inert
+and every test runs: a broken detection fails loudly instead of silently
+skipping the suite.
+
 `--INIT--`, `--RUN--` and `--TEARDOWN--` are executed with `bash`, so they can use
 shell freely — and any helper functions the repo exposes (see below).
 
@@ -96,6 +117,12 @@ Date: REGEX(.*)
 Content-Length: REGEX(\d+)
 "id": "REGEX(urn:ngsi-ld:.+)"
 ```
+
+⚠️ The pattern is spliced into the line's pattern UNBRACKETED, so a top-level
+`|` alternates the whole line, not the parenthesised part: `x: REGEX(true|false)`
+becomes `x:\ true|false`, which matches `x: true` and then demands that `false`
+start at column 1. It accepts one branch and rejects the other while looking
+correct. Write a pattern without top-level alternation (`REGEX([a-z]+)`).
 
 **`#SORT_START` / `#SORT_END`** — the lines between the markers are compared
 order-independently, for output whose ordering isn't guaranteed:

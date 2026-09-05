@@ -418,6 +418,78 @@ function reportSkip()
 
 # -----------------------------------------------------------------------------
 #
+# featureOn - is <feature> compiled into the binary under test?
+#
+function featureOn()
+{
+  case " $COR_TEST_FEATURES " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+
+# -----------------------------------------------------------------------------
+#
+# featureApplies - does this test case apply to the BUILD under test?
+#
+#   # REQUIRE_FEATURE: A B ...   (the test applies only if the build has ALL of them)
+#   # SKIP_FEATURE:    A B ...   (the test applies only if the build has NONE of them)
+#
+# A separate question from REQUIRE_<TAG> above, and so a separate mechanism.
+# REQUIRE_<TAG> asks "is the run configured this way", and matches ONE current
+# value against a list of alternatives. This asks "does the binary contain that
+# code at all", and matches against a SET - every name in the list has to be in
+# it. Feeding features through the value-matching arrays would have made
+# "REQUIRE_FEATURE: A B" mean "A or B", which is the opposite of what a test
+# needing both features means.
+#
+# SKIP_FEATURE is the direction a compiled-out build needs: a test that asserts
+# the 501 for an endpoint that is not in the build can only run where the
+# endpoint is not in the build.
+#
+# COR_TEST_FEATURES holds the ON features, space separated - the repo's
+# corTestParams.sh sets it, normally by asking the binary. UNSET means the repo
+# does not report a feature set, and then both markers are inert: every test
+# runs. That is the loud failure rather than the quiet one - a suite that
+# silently skipped everything on a broken detection would look green.
+#
+# Returns 0 if the test applies, 1 if it does not (sets NA_REASON).
+#
+function featureApplies()
+{
+  local testFile="$1"
+  local line
+  local f
+
+  if [ -z "${COR_TEST_FEATURES+set}" ]; then return 0; fi
+
+  line=$(grep "^# *REQUIRE_FEATURE:" "$testFile" 2>/dev/null | head -1)
+  if [ -n "$line" ]; then
+    for f in ${line#*:}; do
+      if ! featureOn "$f"; then
+        NA_REASON="build has no $f"
+        return 1
+      fi
+    done
+  fi
+
+  line=$(grep "^# *SKIP_FEATURE:" "$testFile" 2>/dev/null | head -1)
+  if [ -n "$line" ]; then
+    for f in ${line#*:}; do
+      if featureOn "$f"; then
+        NA_REASON="build has $f"
+        return 1
+      fi
+    done
+  fi
+
+  return 0
+}
+
+
+# -----------------------------------------------------------------------------
+#
 # testApplies - does this test case apply to the configuration being run?
 #
 #   # REQUIRE_<TAG>: val1 val2 ...   (the test only applies when the current
@@ -435,6 +507,8 @@ function testApplies()
 {
   local testFile="$1"
   NA_REASON=""
+
+  if ! featureApplies "$testFile"; then return 1; fi
 
   for ix in "${!COR_CLI_PARAM_TAGS[@]}"; do
     local tag="${COR_CLI_PARAM_TAGS[$ix]}"
