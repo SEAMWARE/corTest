@@ -157,6 +157,14 @@ function corCurl()
   local _urlParams=""
   local -a _extraHeaders
 
+  #
+  # Scratch files of THIS call's own. $BASHPID, not $$: a request a test sends in
+  # the background ( ... & ) runs in a subshell whose $$ is the test's, and two
+  # such requests at once - which a concurrency test is made of - then wrote
+  # each other's payload, headers and body, so every output held every answer.
+  #
+  local _tmp="/tmp/corCurl.$BASHPID"
+
   while [ "$#" != 0 ]; do
     if   [ "$1" == "--host" ];      then _host="$2"; shift
     elif [ "$1" == "--port" ];      then _port="$2"; shift
@@ -208,8 +216,8 @@ function corCurl()
     if [ -f "$_payload" ]; then
       curlArgs+=(-d "@$_payload")
     else
-      echo "$_payload" > /tmp/corCurlPayload
-      curlArgs+=(-d "@/tmp/corCurlPayload")
+      echo "$_payload" > $_tmp.payload
+      curlArgs+=(-d "@$_tmp.payload")
     fi
   fi
 
@@ -225,7 +233,7 @@ function corCurl()
   fi
 
   # Dump headers to file
-  curlArgs+=(-D /tmp/corCurlHeaders.out)
+  curlArgs+=(-D $_tmp.headers)
 
   #
   # Both scratch files are REMOVED first, and that is not tidiness.
@@ -237,10 +245,10 @@ function corCurl()
   # while proving nothing. Now the file is simply absent and the step prints
   # the curl failure instead, which the expect will not match.
   #
-  \rm -f /tmp/corCurlHeaders.out /tmp/corCurlBody.out
+  \rm -f $_tmp.headers $_tmp.body
 
   # Execute
-  curl "${curlArgs[@]}" "$fullUrl" > /tmp/corCurlBody.out 2>/dev/null
+  curl "${curlArgs[@]}" "$fullUrl" > $_tmp.body 2>/dev/null
   local _curlRc=$?
 
   #
@@ -252,12 +260,13 @@ function corCurl()
   #
   if [ $_curlRc != 0 ]; then
     echo "corCurl: curl failed (exit $_curlRc) for $fullUrl"
+    \rm -f $_tmp.payload $_tmp.headers $_tmp.body
     return 1
   fi
 
   # Output: HTTP status line + headers + empty line + body
-  head -1 /tmp/corCurlHeaders.out | tr -d '\r'
-  tail -n +2 /tmp/corCurlHeaders.out | tr -d '\r' | grep -v "^$"
+  head -1 $_tmp.headers | tr -d '\r'
+  tail -n +2 $_tmp.headers | tr -d '\r' | grep -v "^$"
   echo ""
 
   # Sort JSON object keys for deterministic output across backends.
@@ -265,13 +274,15 @@ function corCurl()
   if [ "$_outFormat" == "text" ] || [ "$_outFormat" == "raw" ]; then
     # Non-JSON response (e.g. Prometheus exposition) — emit the body verbatim;
     # kjson -sort would silently eat it.
-    cat /tmp/corCurlBody.out
-  elif [ -n "$KJSON" ] && [ -s /tmp/corCurlBody.out ]; then
-    $KJSON -sort < /tmp/corCurlBody.out 2>/dev/null | head -c -1 || cat /tmp/corCurlBody.out
+    cat $_tmp.body
+  elif [ -n "$KJSON" ] && [ -s $_tmp.body ]; then
+    $KJSON -sort < $_tmp.body 2>/dev/null | head -c -1 || cat $_tmp.body
   else
-    cat /tmp/corCurlBody.out
+    cat $_tmp.body
   fi
   echo
+
+  \rm -f $_tmp.payload $_tmp.headers $_tmp.body
 }
 
 
