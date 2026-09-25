@@ -176,6 +176,15 @@ function corCurl()
     elif [ "$1" == "--header" ];    then _extraHeaders+=("$2"); shift
     elif [ "$1" == "--in" ];        then _inFormat="$2"; shift
     elif [ "$1" == "--out" ];       then _outFormat="$2"; shift
+    else
+      #
+      # An option corCurl does not know is an error, and says so in the test's
+      # own output (stdout, as "curl failed" does). Skipping it silently sent
+      # the request WITHOUT what the option meant - "--tenant t1" queried the
+      # default tenant - and the step passed on the wrong answer.
+      #
+      echo "corCurl: unknown option '$1'"
+      return 1
     fi
     shift
   done
