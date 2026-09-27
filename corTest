@@ -1196,7 +1196,7 @@ for testFile in $testFiles; do
 
   if [ "$result" == 0 ]; then
     # --- PASS ---
-    # NB: possibly-lost (the constant ~28KB kalloc-arena baseline) is intentionally
+    # NB: possibly-lost (the constant ~28KB corAlloc-arena baseline) is intentionally
     # NOT shown — it's identical on every line and not actionable. It still never
     # fails the gate (only definite/indirect leaks do).
     printf "%s\n" "$suffix"
