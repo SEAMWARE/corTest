@@ -245,6 +245,7 @@ function usage()
   echo "$empty [--filter <pattern>]           (default: *.test)"
   echo "$empty [--match <grep-pattern>]       (filter test names)"
   echo "$empty [--keep]                       (keep output files on success)"
+  echo "$empty [--keepLogs]                   (keep the broker logs on success - and only them)"
   echo "$empty [--dryrun]                     (list tests, don't run)"
   echo "$empty [--stopOnError]                (stop on first failure)"
   echo "$empty [--maxTries <N>]               (retry failing tests, default: 1)"
@@ -881,6 +882,7 @@ verbose=off
 testFilter="*.test"
 matchPattern=""
 keepFiles=off
+keepLogs=off
 dryRun=off
 stopOnError=off
 maxTries=1
@@ -904,6 +906,7 @@ do
   elif [ "$1" == "--filter" ];      then testFilter="$2"; shift;
   elif [ "$1" == "--match" ];       then matchPattern="$2"; shift;
   elif [ "$1" == "--keep" ];        then keepFiles=on;
+  elif [ "$1" == "--keepLogs" ];    then keepLogs=on;
   elif [ "$1" == "--dryrun" ];      then dryRun=on;
   elif [ "$1" == "--stopOnError" ]; then stopOnError=on;
   elif [ "$1" == "--maxTries" ];    then maxTries="$2"; shift;
@@ -1204,6 +1207,19 @@ for testFile in $testFiles; do
 
     if [ "$keepFiles" != "on" ]; then
       fileCleanup "$testFile"
+    fi
+
+    #
+    # --keepLogs: the broker logs of a PASSING test too, and nothing else - a pass is not
+    # proof that a log holds nothing of interest (an error line the test does not assert
+    # on). One per role, named as on FAIL below.
+    #
+    if [ "$keepLogs" == "on" ]; then
+      for _log in /tmp/coraine.*.log; do
+        [ -f "$_log" ] || continue
+        _role=$(basename "$_log" .log | sed 's/^coraine\.//')
+        cp "$_log" "$(dirname "$testFile")/$(basename "$testFile" .test).$_role.log"
+      done
     fi
   else
     # --- FAIL ---
