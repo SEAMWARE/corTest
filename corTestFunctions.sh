@@ -245,6 +245,79 @@ function corCurl()
   curlArgs+=(-D $_tmp.headers)
 
   #
+  # COR_TRANSPORT=cor: the same request over cor:// - the broker's binary API - when it can travel
+  # there, and the same output: corRequest --curl prints the header block exactly as the HTTP server's
+  # would be shown, and writes the body where curl does, for the same post-processing below.
+  #
+  # What stays on curl: a port that is not a broker's (the cor:// port is the HTTP port + 1000, and
+  # only brokers open it); a body that is not JSON (it must reach the server to be refused); a text or
+  # raw answer (/metrics); HEAD; a POST, PUT or PATCH without a body (HTTP's 411 Length Required has
+  # no cor:// counterpart - a frame always has a length); a method that is not one of the broker's
+  # (HTTP's 400/405 for it - a cor:// verb is one of these by construction).
+  #
+  local _httpOnly=false
+  case "$_method" in
+    POST|PUT|PATCH)       [ "$_payload" == "" ] && _httpOnly=true;;
+    ""|GET|DELETE|OPTIONS) ;;
+    *)                    _httpOnly=true;;
+  esac
+
+  if [ "$COR_TRANSPORT" == "cor" ] && [ -x "$COR_REQUEST" ] && [ "$_inFormat" != "text" ] && \
+     [ "$_outFormat" != "text" ] && [ "$_outFormat" != "raw" ] && [ "$_method" != "HEAD" ] && \
+     [ "$_httpOnly" == "false" ] && \
+     corPortOpen $((_port + 1000)) 2>/dev/null
+  then
+    local -a corArgs
+    local    i
+    local    corPath="$_url"
+
+    [ "$_urlParams" != "" ] && corPath="${corPath}?${_urlParams}"
+    # curl's URL globbing: '\[' is a literal '[' - what reaches the server has no backslash
+    corPath="${corPath//\\[/[}"; corPath="${corPath//\\]/]}"; corPath="${corPath//\\\{/\{}"; corPath="${corPath//\\\}/\}}"
+    corArgs=(--url "cor://${_host}:$((_port + 1000))" --path "$corPath" --curl --bodyFile $_tmp.body --pretty 2)
+    # curl makes a request with a body and no -X a POST; corRequest defaults to GET - so, the same
+    if [ "$_method" != "" ]; then
+      corArgs+=(-X "$_method")
+    elif [ "$_payload" != "" ]; then
+      corArgs+=(-X POST)
+    fi
+
+    local hdrs=""
+    for ((i = 0; i < ${#curlArgs[@]}; i++)); do
+      [ "${curlArgs[$i]}" == "-H" ] && hdrs="${hdrs:+$hdrs|}${curlArgs[$((i + 1))]}"
+    done
+    [ "$hdrs" != "" ] && corArgs+=(--header "$hdrs")
+
+    if [ "$_payload" != "" ]; then
+      if [ -f "$_payload" ]; then corArgs+=(--payload "$(cat "$_payload")"); else corArgs+=(--payload "$_payload"); fi
+    fi
+
+    \rm -f $_tmp.headers $_tmp.body
+    $COR_REQUEST "${corArgs[@]}" > $_tmp.headers < /dev/null
+    local _corRc=$?
+
+    if [ $_corRc == 0 ]; then
+      [ -n "$COR_TRANSPORT_TRACE" ] && echo "cor ${_method:-GET} $_url" >> "$COR_TRANSPORT_TRACE"
+      cat $_tmp.headers
+      echo ""
+      if [ -n "$CORJSON" ] && [ -s $_tmp.body ]; then
+        $CORJSON -sort < $_tmp.body 2>/dev/null | head -c -1 || cat $_tmp.body
+      else
+        cat $_tmp.body 2>/dev/null
+      fi
+      echo
+      \rm -f $_tmp.payload $_tmp.headers $_tmp.body
+      return 0
+    fi
+    # 3: not JSON - only HTTP carries it; anything else: say so, as a curl failure would
+    if [ $_corRc != 3 ]; then
+      echo "corCurl: corRequest failed (exit $_corRc) for cor://${_host}:$((_port + 1000))$corPath"
+      \rm -f $_tmp.payload $_tmp.headers $_tmp.body
+      return 1
+    fi
+  fi
+
+  #
   # Both scratch files are REMOVED first, and that is not tidiness.
   # -D only writes when curl actually gets a response, so a curl that fails
   # outright (a URL it will not accept, connection refused, ...) used to leave
@@ -257,6 +330,7 @@ function corCurl()
   \rm -f $_tmp.headers $_tmp.body
 
   # Execute
+  [ -n "$COR_TRANSPORT_TRACE" ] && echo "http ${_method:-GET} $_url" >> "$COR_TRANSPORT_TRACE"
   curl "${curlArgs[@]}" "$fullUrl" > $_tmp.body 2>/dev/null
   local _curlRc=$?
 
