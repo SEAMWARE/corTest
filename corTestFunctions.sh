@@ -253,9 +253,11 @@ function corCurl()
   # only brokers open it); a body that is not JSON (it must reach the server to be refused); a text or
   # raw answer (/metrics); HEAD; a POST, PUT or PATCH without a body (HTTP's 411 Length Required has
   # no cor:// counterpart - a frame always has a length); a method that is not one of the broker's
-  # (HTTP's 400/405 for it - a cor:// verb is one of these by construction).
+  # (HTTP's 400/405 for it - a cor:// verb is one of these by construction); a body over 1 MiB.
   #
   local _httpOnly=false
+  # a body over HTTP's 1 MiB cap: 100 Continue and 413 are HTTP's (a cor:// frame's cap is 64 MiB)
+  if [ "$_payload" != "" ] && [ -f "$_payload" ] && [ $(stat -c %s "$_payload") -gt 1048576 ]; then _httpOnly=true; fi
   case "$_method" in
     POST|PUT|PATCH)       [ "$_payload" == "" ] && _httpOnly=true;;
     ""|GET|DELETE|OPTIONS) ;;
@@ -288,13 +290,15 @@ function corCurl()
     done
     [ "$hdrs" != "" ] && corArgs+=(--header "$hdrs")
 
+    # the body through a file: on the command line, a large one is 'Argument list too long'
     if [ "$_payload" != "" ]; then
-      if [ -f "$_payload" ]; then corArgs+=(--payload "$(cat "$_payload")"); else corArgs+=(--payload "$_payload"); fi
+      if [ -f "$_payload" ]; then corArgs+=(--payloadFile "$_payload"); else printf '%s' "$_payload" > $_tmp.corPayload; corArgs+=(--payloadFile $_tmp.corPayload); fi
     fi
 
     \rm -f $_tmp.headers $_tmp.body
     $COR_REQUEST "${corArgs[@]}" > $_tmp.headers < /dev/null
     local _corRc=$?
+    \rm -f $_tmp.corPayload
 
     if [ $_corRc == 0 ]; then
       [ -n "$COR_TRANSPORT_TRACE" ] && echo "cor ${_method:-GET} $_url" >> "$COR_TRANSPORT_TRACE"
