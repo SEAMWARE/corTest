@@ -114,8 +114,8 @@ COR_TEST_PARAMS="${COR_TEST_PARAMS:-${REPO_ROOT}/test/funcTests/corTestParams.sh
 # orphans that the NEXT run cleans up. The INT/TERM traps take the brokers down
 # with us instead of orphaning them.
 #
-# ftClient is the SAME binary in every suite this harness drives, so it is
-# reaped BY PORT RANGE (Coraine owns 77xx) — a bare `killall ftClient` here
+# corTestClient (was ftClient) is the SAME binary in every suite this harness drives, so it is
+# reaped BY PORT RANGE (Coraine owns 77xx) — a bare `killall corTestClient` here
 # would shoot a concurrently running suite's mocks mid-run, and it used to.
 #
 # /tmp/sTest.out is the "follow any running test" file — truncated per run and
@@ -135,7 +135,7 @@ corTestReap()
 
   pkill -9 -f "valgrind.*coraine"      2>/dev/null
   killall -9 coraine                   2>/dev/null
-  pkill -9 -f "ftClient.*--port 77"     2>/dev/null
+  pkill -9 -f "(corTestClient|ftClient).*--port 77" 2>/dev/null   # the old name too: an orphan from before the rename
   return 0
 }
 
