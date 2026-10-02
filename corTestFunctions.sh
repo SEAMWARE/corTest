@@ -86,11 +86,14 @@ function corAwaitPort()
   # sleeping 0.2s between them, so `corAwaitPort <port> 10` waited two seconds
   # and called it ten - fine on an idle workstation, not on a loaded runner.
   #
+  # 20 ms between attempts: a broker is up in some 50 ms, and 0.2 s steps made
+  # every start cost 0.2 s - in every test, for every broker it starts.
+  #
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
       return 0
     fi
-    sleep 0.2
+    sleep 0.02
   done
 
   echo "corAwaitPort: port $port not ready after ${maxWait}s" >&2
