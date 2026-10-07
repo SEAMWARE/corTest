@@ -1041,6 +1041,30 @@ fi
 #
 logMsg "=== corTest starting: $totalTests tests ==="
 
+#
+# The run's header - its first line: WHAT is being tested, so a log read later (or followed with tail -F)
+# says so before the first test does. The repo's parameters (-db first), the broker and its build, the
+# branch, the environment that changes the broker (COR_TEST_ENV_PREFIX, CORAINE_ by default), the count
+# and the time.
+#
+runHeader="corTest:"
+for ix in "${!COR_CLI_PARAM_NAMES[@]}"; do
+  pVar="${COR_CLI_PARAM_VARS[$ix]}"
+  pVal="${!pVar}"
+  [ -n "$pVal" ] && [ "$pVal" != "NONE" ] && runHeader+=" ${COR_CLI_PARAM_NAMES[$ix]#-} ${pVal} -"
+done
+if [ -n "${COR_BROKER:-}" ] && command -v "$COR_BROKER" > /dev/null 2>&1; then
+  brokerVersion=$("$COR_BROKER" --version 2>/dev/null | head -1)
+  brokerHttp=$("$COR_BROKER" --version 2>/dev/null | sed -n 's/^httpServer: //p')
+  runHeader+=" ${brokerVersion:-$COR_BROKER}${brokerHttp:+ ($brokerHttp)} -"
+fi
+gitWhere=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)@$(git rev-parse --short HEAD 2>/dev/null)
+[ "$gitWhere" != "@" ] && runHeader+=" $gitWhere -"
+envOver=$(env | grep "^${COR_TEST_ENV_PREFIX:-CORAINE_}" | sort | tr '\n' ' ')
+[ -n "$envOver" ] && runHeader+=" ${envOver% } -"
+runHeader+=" $totalTests tests - $(date '+%Y-%m-%d %H:%M')"
+echo "$runHeader"
+
 # Column where the dots end (same for PASS, FAIL, SKIP).
 # The status suffix (time / "SKIP (reason)" / "FAIL: ...") comes after.
 DOT_END_COL=90
