@@ -293,7 +293,7 @@ git-ignored):
 | File | Contents |
 |------|----------|
 | `<test>.out` | Captured stdout of `--RUN--` |
-| `<test>.diff` | The corDiff output (what didn't match) |
+| `<test>.diff` | The corDiff output: a unified diff (`diff -u`) of the expected against the actual output, numbered by the expected file's lines, each hunk headed by its step; lines matching their `REGEX(...)` are not differences |
 | `<test>.run.stderr` | stderr of the `--RUN--` section |
 | `<test>.init.stderr` / `<test>.teardown.stderr` | stderr of setup / cleanup |
 
