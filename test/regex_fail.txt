@@ -1,0 +1,18 @@
+01. Two REGEXes on one line
+===========================
+command line: /usr/local/bin/coraine --port 1026 http://localhost:1026 --dbDir
+
+
+02. Nested parentheses in a pattern
+===================================
+id: urn:ngsi-ld:Vehicle:42
+
+
+03. A literal ')' right after a REGEX
+=====================================
+(count: 17
+
+
+04. Escaped parens and a character class holding parens
+=======================================================
+call: f(12) returned (x)() - done

@@ -14,10 +14,14 @@
 #      the step (a line underlined by '=') the difference is in. --json is unchanged.
 #
 # Self-check fixtures in test/: steps_reference.txt against steps_{insertion,changed,
-# removed,regex}.txt, and reference.txt (#SORT) against input_{ok,fail}.txt.
+# removed,regex}.txt, reference.txt (#SORT) against input_{ok,fail}.txt, and
+# regex_reference.txt (several REGEXes per line, parens in patterns) against regex_{ok,fail}.txt.
 #
 # Reference file markers:
-#   REGEX(pattern)  - embedded in a line, that portion is matched as a regex
+#   REGEX(pattern)  - embedded in a line, that portion is matched as a regex. Any number per
+#                     line; the pattern ends at the ')' that balances 'REGEX(' (escaped
+#                     parens and [character classes] do not count), the text around the
+#                     patterns is literal, and the whole line must match
 #   #SORT_START     - begin a block of lines that should be sorted before comparison
 #   #SORT_END       - end a sorted block
 #
@@ -30,21 +34,87 @@ import difflib
 from argparse import ArgumentParser
 
 
-def escape_non_regex(s):
-    """Escape regex-sensitive characters in the non-REGEX parts of a line."""
-    for ch in ['[', ']', '{', '}', '?', '(', ')', '.', '+', '*', '^', '$', '|']:
-        s = s.replace(ch, '\\' + ch)
-    return s
+def _regex_end(s, start):
+    """Index of the ')' that closes a REGEX( whose pattern starts at s[start], or -1.
+    Parentheses are balanced; an escaped character (\\( \\) \\\\ ...) and everything inside a
+    character class ([...], where ']' first or right after '^' is literal) do not count."""
+    depth = 1
+    i, n = start, len(s)
+    while i < n:
+        c = s[i]
+        if c == '\\':
+            i += 2
+            continue
+        if c == '[':
+            i += 1
+            if i < n and s[i] == '^':
+                i += 1
+            if i < n and s[i] == ']':
+                i += 1
+            while i < n and s[i] != ']':
+                i += 2 if s[i] == '\\' else 1
+            i += 1
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def ref_regex(ref_line):
+    """The reference line as ONE anchored regex, or None when it has no REGEX(...).
+    The line is split into literal and REGEX(pattern) segments - any number of them -
+    the literals escaped, the patterns kept, everything joined and matched in full."""
+    if 'REGEX(' not in ref_line:
+        return None
+    parts = []
+    pos = 0
+    while True:
+        k = ref_line.find('REGEX(', pos)
+        if k < 0:
+            break
+        end = _regex_end(ref_line, k + 6)
+        if end < 0:
+            # No balancing ')': the pattern runs to the last ')' on the line, if there is one
+            end = ref_line.rfind(')')
+            if end < k + 6:
+                break
+        parts.append(re.escape(ref_line[pos:k]))
+        parts.append('(?:' + ref_line[k + 6:end] + ')')
+        pos = end + 1
+    parts.append(re.escape(ref_line[pos:]))
+    return ''.join(parts)
+
+
+_compiled = {}
+
+
+def _compile(ref_line):
+    """Compiled ref_regex() of a line (cached); False for a line without REGEX(...), None for
+    a pattern that does not compile (which then matches nothing)."""
+    if ref_line not in _compiled:
+        rx = ref_regex(ref_line)
+        if rx is None:
+            _compiled[ref_line] = False
+        else:
+            try:
+                _compiled[ref_line] = re.compile(rx)
+            except re.error:
+                _compiled[ref_line] = None
+    return _compiled[ref_line]
 
 
 def line_matches(ref_line, input_line):
     """Check if input_line matches ref_line, which may contain REGEX() markers.
     Returns (matches: bool, is_regex: bool)."""
-    m = re.match(r'(.*)REGEX\((.*)\)(.*)', ref_line)
-    if m:
-        regex = escape_non_regex(m.group(1)) + m.group(2) + escape_non_regex(m.group(3))
-        return bool(re.match(regex, input_line)), True
-    return ref_line == input_line, False
+    rx = _compile(ref_line)
+    if rx is False:
+        return ref_line == input_line, False
+    return rx is not None and rx.fullmatch(input_line) is not None, True
 
 
 def parse_sort_blocks(ref_lines):
@@ -158,14 +228,12 @@ def diff_lines(ref_lines, input_lines):
 
 def _matcher(ref_line):
     """Precompiled 'does an input line match this reference line' - the rule of line_matches()."""
-    m = re.match(r'(.*)REGEX\((.*)\)(.*)', ref_line)
-    if m:
-        try:
-            rx = re.compile(escape_non_regex(m.group(1)) + m.group(2) + escape_non_regex(m.group(3)))
-        except re.error:
-            return lambda s: False
-        return lambda s: rx.match(s) is not None
-    return lambda s: s == ref_line
+    rx = _compile(ref_line)
+    if rx is False:
+        return lambda s: s == ref_line
+    if rx is None:
+        return lambda s: False
+    return lambda s: rx.fullmatch(s) is not None
 
 
 def align(ref_lines, input_lines):
