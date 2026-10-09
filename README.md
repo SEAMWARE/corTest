@@ -79,6 +79,17 @@ decided to pass on those five; they simply do not apply to the chosen database.
 `SKIP_` is the other thing: a test that does apply and is being passed over, which
 is worth reporting as such.
 
+corTest's own `-vt` (the main broker under valgrind) takes the same marker, with
+`on` / `off` as its values:
+
+```
+# SKIP_VALGRIND: on             the test is SKIPPED in a -vt run
+```
+
+For a test that cannot run under memcheck at all — one that kills its broker
+with a fatal signal on purpose, or reads the broker's threads in `/proc`, where
+the process is valgrind's.
+
 A third pair asks about the BINARY rather than the run:
 
 ```
