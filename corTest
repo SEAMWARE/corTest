@@ -259,7 +259,7 @@ function usage()
   echo "$empty [--skipNames <list>]          (skip these test NAMES; default \$CORTEST_SKIP, for a standing list)"
   echo "$empty [--tags <csv>]                 (only run tests whose --TAGS-- intersect)"
   echo "$empty [--skip-tags <csv>]            (run all tests EXCEPT those whose --TAGS-- intersect)"
-  echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors)"
+  echo "$empty [-vt | --vt]                   (run the main broker under valgrind; fail on definite/indirect leaks or errors; a test marked SKIP_VALGRIND: on is skipped)"
   echo "$empty [<file.test> | <directory>]... (default: cases/)"
 
   # Repo-injected parameters
@@ -555,6 +555,24 @@ function shouldSkipTest()
 {
   local testFile="$1"
   SKIP_REASON=""
+
+  #
+  # SKIP_VALGRIND: on - the run's -vt, a parameter of corTest itself rather than one the repo registers,
+  # so it is not in the arrays below; same marker grammar (the values the test is skipped for), same
+  # report. For a test that cannot run under memcheck at all - one that kills its broker with a fatal
+  # signal, or reads the broker's threads in /proc, where valgrind's process is not the broker's.
+  #
+  local vgLine
+  vgLine=$(grep "^# *SKIP_VALGRIND:" "$testFile" 2>/dev/null | head -1)
+  if [ -n "$vgLine" ]; then
+    local v
+    for v in ${vgLine#*:}; do
+      if [ "$v" == "$valgrind" ]; then
+        SKIP_REASON="skipped for VALGRIND=$valgrind"
+        return 0
+      fi
+    done
+  fi
 
   for ix in "${!COR_CLI_PARAM_TAGS[@]}"; do
     local tag="${COR_CLI_PARAM_TAGS[$ix]}"
