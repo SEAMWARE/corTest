@@ -8,9 +8,20 @@
 #   2. If diff finds differences, do a second round:
 #      a. Process #SORT_START / #SORT_END blocks: sort lines within those blocks
 #      b. Compare line-by-line with REGEX() support in reference lines
+#   3. On a mismatch, print a unified diff (diff -u) of the expected against the actual
+#      output, aligned like diff does, with 'equal' meaning "matches, REGEX() included".
+#      Hunk lines are numbered by the expected/actual file lines and the hunk header names
+#      the step (a line underlined by '=') the difference is in. --json is unchanged.
+#
+# Self-check fixtures in test/: steps_reference.txt against steps_{insertion,changed,
+# removed,regex}.txt, reference.txt (#SORT) against input_{ok,fail}.txt, and
+# regex_reference.txt (several REGEXes per line, parens in patterns) against regex_{ok,fail}.txt.
 #
 # Reference file markers:
-#   REGEX(pattern)  - embedded in a line, that portion is matched as a regex
+#   REGEX(pattern)  - embedded in a line, that portion is matched as a regex. Any number per
+#                     line; the pattern ends at the ')' that balances 'REGEX(' (escaped
+#                     parens and [character classes] do not count), the text around the
+#                     patterns is literal, and the whole line must match
 #   #SORT_START     - begin a block of lines that should be sorted before comparison
 #   #SORT_END       - end a sorted block
 #
@@ -19,24 +30,91 @@ import sys
 import os
 import subprocess
 import re
+import difflib
 from argparse import ArgumentParser
 
 
-def escape_non_regex(s):
-    """Escape regex-sensitive characters in the non-REGEX parts of a line."""
-    for ch in ['[', ']', '{', '}', '?', '(', ')', '.', '+', '*', '^', '$', '|']:
-        s = s.replace(ch, '\\' + ch)
-    return s
+def _regex_end(s, start):
+    """Index of the ')' that closes a REGEX( whose pattern starts at s[start], or -1.
+    Parentheses are balanced; an escaped character (\\( \\) \\\\ ...) and everything inside a
+    character class ([...], where ']' first or right after '^' is literal) do not count."""
+    depth = 1
+    i, n = start, len(s)
+    while i < n:
+        c = s[i]
+        if c == '\\':
+            i += 2
+            continue
+        if c == '[':
+            i += 1
+            if i < n and s[i] == '^':
+                i += 1
+            if i < n and s[i] == ']':
+                i += 1
+            while i < n and s[i] != ']':
+                i += 2 if s[i] == '\\' else 1
+            i += 1
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def ref_regex(ref_line):
+    """The reference line as ONE anchored regex, or None when it has no REGEX(...).
+    The line is split into literal and REGEX(pattern) segments - any number of them -
+    the literals escaped, the patterns kept, everything joined and matched in full."""
+    if 'REGEX(' not in ref_line:
+        return None
+    parts = []
+    pos = 0
+    while True:
+        k = ref_line.find('REGEX(', pos)
+        if k < 0:
+            break
+        end = _regex_end(ref_line, k + 6)
+        if end < 0:
+            # No balancing ')': the pattern runs to the last ')' on the line, if there is one
+            end = ref_line.rfind(')')
+            if end < k + 6:
+                break
+        parts.append(re.escape(ref_line[pos:k]))
+        parts.append('(?:' + ref_line[k + 6:end] + ')')
+        pos = end + 1
+    parts.append(re.escape(ref_line[pos:]))
+    return ''.join(parts)
+
+
+_compiled = {}
+
+
+def _compile(ref_line):
+    """Compiled ref_regex() of a line (cached); False for a line without REGEX(...), None for
+    a pattern that does not compile (which then matches nothing)."""
+    if ref_line not in _compiled:
+        rx = ref_regex(ref_line)
+        if rx is None:
+            _compiled[ref_line] = False
+        else:
+            try:
+                _compiled[ref_line] = re.compile(rx)
+            except re.error:
+                _compiled[ref_line] = None
+    return _compiled[ref_line]
 
 
 def line_matches(ref_line, input_line):
     """Check if input_line matches ref_line, which may contain REGEX() markers.
     Returns (matches: bool, is_regex: bool)."""
-    m = re.match(r'(.*)REGEX\((.*)\)(.*)', ref_line)
-    if m:
-        regex = escape_non_regex(m.group(1)) + m.group(2) + escape_non_regex(m.group(3))
-        return bool(re.match(regex, input_line)), True
-    return ref_line == input_line, False
+    rx = _compile(ref_line)
+    if rx is False:
+        return ref_line == input_line, False
+    return rx is not None and rx.fullmatch(input_line) is not None, True
 
 
 def parse_sort_blocks(ref_lines):
@@ -148,6 +226,148 @@ def diff_lines(ref_lines, input_lines):
     return result
 
 
+def _matcher(ref_line):
+    """Precompiled 'does an input line match this reference line' - the rule of line_matches()."""
+    rx = _compile(ref_line)
+    if rx is False:
+        return lambda s: s == ref_line
+    if rx is None:
+        return lambda s: False
+    return lambda s: rx.fullmatch(s) is not None
+
+
+def align(ref_lines, input_lines):
+    """Align the reference against the input the way diff does (longest common subsequence),
+    with 'equal' meaning line_matches() - a line that matches its REGEX is NOT a difference.
+    Returns difflib-style opcodes: (tag, i1, i2, j1, j2), tag in equal/replace/delete/insert."""
+    n, m = len(ref_lines), len(input_lines)
+    eq = [_matcher(r) for r in ref_lines]
+
+    # Common prefix and suffix first: what is left in the middle is usually a few lines
+    lo = 0
+    while lo < n and lo < m and eq[lo](input_lines[lo]):
+        lo += 1
+    hi_r, hi_i = n, m
+    while hi_r > lo and hi_i > lo and eq[hi_r - 1](input_lines[hi_i - 1]):
+        hi_r -= 1
+        hi_i -= 1
+
+    pairs = []   # matched (ref index, input index) pairs in the middle
+    rn, im = hi_r - lo, hi_i - lo
+    if rn > 0 and im > 0:
+        if rn * im <= 4000000:
+            # LCS table, built from the end so that the walk below goes forwards
+            L = [[0] * (im + 1) for _ in range(rn + 1)]
+            for a in range(rn - 1, -1, -1):
+                f = eq[lo + a]
+                row, nxt = L[a], L[a + 1]
+                for b in range(im - 1, -1, -1):
+                    if f(input_lines[lo + b]):
+                        row[b] = nxt[b + 1] + 1
+                    else:
+                        row[b] = nxt[b] if nxt[b] >= row[b + 1] else row[b + 1]
+            a = b = 0
+            while a < rn and b < im:
+                if L[a][b] == L[a + 1][b + 1] + 1 and eq[lo + a](input_lines[lo + b]):
+                    pairs.append((lo + a, lo + b))
+                    a += 1
+                    b += 1
+                elif L[a + 1][b] >= L[a][b + 1]:
+                    a += 1
+                else:
+                    b += 1
+        else:
+            # Too big for the table: a plain-text alignment; REGEX lines are then accepted
+            # pairwise below
+            sm = difflib.SequenceMatcher(None, ref_lines[lo:hi_r], input_lines[lo:hi_i], autojunk=False)
+            for a, b, size in sm.get_matching_blocks():
+                for k in range(size):
+                    pairs.append((lo + a + k, lo + b + k))
+
+    # Opcodes out of prefix + pairs + suffix
+    matched = [(k, k) for k in range(lo)] + pairs + [(hi_r + k, hi_i + k) for k in range(n - hi_r)]
+    ops = []
+    i = j = 0
+    for (a, b) in matched + [(n, m)]:
+        if a > i or b > j:
+            tag = 'replace' if (a > i and b > j) else ('delete' if a > i else 'insert')
+            ops.append([tag, i, a, j, b])
+        if a < n and b < m:
+            if ops and ops[-1][0] == 'equal' and ops[-1][2] == a and ops[-1][4] == b:
+                ops[-1][2] += 1
+                ops[-1][4] += 1
+            else:
+                ops.append(['equal', a, a + 1, b, b + 1])
+        i, j = a + 1, b + 1
+
+    # A replace whose lines match pairwise (the fallback path, REGEX lines) is equal after all
+    out = []
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == 'replace' and i2 - i1 == j2 - j1 and \
+           all(eq[i1 + k](input_lines[j1 + k]) for k in range(i2 - i1)):
+            tag = 'equal'
+        if out and out[-1][0] == 'equal' and tag == 'equal':
+            out[-1] = ('equal', out[-1][1], i2, out[-1][3], j2)
+        else:
+            out.append((tag, i1, i2, j1, j2))
+    return out
+
+
+class _Opcodes(difflib.SequenceMatcher):
+    """Lets difflib group OUR opcodes into hunks (get_grouped_opcodes)."""
+    def __init__(self, opcodes):
+        super().__init__(None, [], [])
+        self._ops = [tuple(o) for o in opcodes]
+
+    def get_opcodes(self):
+        return list(self._ops)
+
+
+def _step_header(ref_lines, upto):
+    """The nearest step header at or above ref_lines[upto]: a line underlined by a line of '='."""
+    for k in range(min(upto, len(ref_lines) - 2), -1, -1):
+        if ref_lines[k].strip() and re.fullmatch(r'=+', ref_lines[k + 1]):
+            return ref_lines[k]
+    return ''
+
+
+def _range(nums, i1, i2):
+    """Unified-diff 'start,count' of nums[i1:i2] (file line numbers)."""
+    count = i2 - i1
+    start = nums[i1] if count else (nums[i1 - 1] if i1 > 0 else 0)
+    return f"{start}" if count == 1 else f"{start},{count}"
+
+
+def unified_diff(ref_lines, input_lines, ref_nums, input_nums, ref_name, input_name, context=3):
+    """diff -u of the expected against the actual output, REGEX-aware, numbered by the
+    expected/actual FILE lines. A hunk header names the step its first difference is in."""
+    ops = align(ref_lines, input_lines)
+    first = next((o for o in ops if o[0] != 'equal'), None)
+    if first is None:
+        return []
+
+    def at(nums, idx):
+        return nums[idx] if idx < len(nums) else (nums[-1] + 1 if nums else 1)
+
+    out = [f"First difference: expected line {at(ref_nums, first[1])}, actual line {at(input_nums, first[3])}"
+           f" (expected {len(ref_lines)} lines, actual {len(input_lines)})",
+           f"--- {ref_name} (expected)",
+           f"+++ {input_name} (actual)"]
+    for group in _Opcodes(ops).get_grouped_opcodes(context):
+        i1, i2, j1, j2 = group[0][1], group[-1][2], group[0][3], group[-1][4]
+        change = next(g for g in group if g[0] != 'equal')
+        header = _step_header(ref_lines, change[1] - 1) if change[1] > 0 else ''
+        out.append(f"@@ -{_range(ref_nums, i1, i2)} +{_range(input_nums, j1, j2)} @@"
+                   + (f" {header}" if header else ''))
+        for tag, a1, a2, b1, b2 in group:
+            if tag == 'equal':
+                out.extend(' ' + ln for ln in ref_lines[a1:a2])
+            else:
+                out.extend('-' + ln for ln in ref_lines[a1:a2])
+                out.extend('+' + ln for ln in input_lines[b1:b2])
+    return out
+
+
 def read_lines(filepath):
     """Read file, strip trailing whitespace from each line."""
     with open(filepath, 'r') as f:
@@ -179,10 +399,18 @@ def cor_diff(ref_file, input_file, verbose=False):
     sort_blocks = parse_sort_blocks(ref_lines)
     has_sort = len(sort_blocks) > 0
 
+    # (text, file line number) pairs, so that the lines of a sorted block keep their numbers
+    ref_numbered = [(ln, k + 1) for k, ln in enumerate(ref_lines)]
+    input_numbered = [(ln, k + 1) for k, ln in enumerate(input_lines)]
     if has_sort:
-        ref_lines, input_lines = apply_sort_blocks(ref_lines, input_lines, sort_blocks)
+        ref_numbered, input_numbered = apply_sort_blocks(ref_numbered, input_numbered, sort_blocks)
 
-    return diff_lines(ref_lines, input_lines), has_sort
+    ref_lines = [t for t, _ in ref_numbered]
+    input_lines = [t for t, _ in input_numbered]
+    result = diff_lines(ref_lines, input_lines)
+    result.ref_lines, result.ref_nums = ref_lines, [k for _, k in ref_numbered]
+    result.input_lines, result.input_nums = input_lines, [k for _, k in input_numbered]
+    return result, has_sort
 
 
 def main():
@@ -223,14 +451,18 @@ def main():
         }
         print(json.dumps(output, indent=2))
     else:
-        if result.line_count_error:
-            print(result.line_count_error)
-        for ln, ref, inp, kind in result.errors:
-            print(f"Line {ln}: {kind}")
-            print(f"  ref:   {ref}")
-            print(f"  input: {inp}")
+        #
+        # A unified diff - not line N of one file against line N of the other, which after
+        # the first added or removed line is off for the rest of the file and points the
+        # reader at the wrong step. Lines that match their REGEX are not differences.
+        #
         if result.ok:
             print("OK")
+        else:
+            for ln in unified_diff(result.ref_lines, result.input_lines,
+                                   result.ref_nums, result.input_nums,
+                                   args.reference, args.input):
+                print(ln)
 
     sys.exit(0 if result.ok else 1)
 

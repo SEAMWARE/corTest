@@ -1,0 +1,28 @@
+01. Create E1
+=============
+HTTP/1.1 201 Created
+Location: /ngsi-ld/v1/entities/urn:E1
+Date: REGEX(.*)
+
+
+02. Create E2
+=============
+HTTP/1.1 201 Created
+Location: /ngsi-ld/v1/entities/urn:E2
+Date: REGEX(.*)
+
+
+03. PATCH a of E1
+=================
+HTTP/1.1 204 No Content
+Date: REGEX(.*)
+
+
+04. Compare the attributes of E1 before and after the restart
+=============================================================
+same
+
+
+05. Stop (a snapshot), start: E1 and E2 as kept
+===============================================
+same

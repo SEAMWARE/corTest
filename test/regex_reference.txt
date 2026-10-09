@@ -1,0 +1,18 @@
+01. Two REGEXes on one line
+===========================
+command line: REGEX((/\S*/)?)coraine --port 1026 http://localhost:1026REGEX(( --[a-zA-Z]+ \S+)+)
+
+
+02. Nested parentheses in a pattern
+===================================
+id: REGEX((urn:(ngsi-ld|seamware):[A-Z][a-z]+)(:[0-9]+)?)
+
+
+03. A literal ')' right after a REGEX
+=====================================
+(count: REGEX(\d+))
+
+
+04. Escaped parens and a character class holding parens
+=======================================================
+call: REGEX(f\(\d+\)) returned REGEX([()x]+) - done
