@@ -133,8 +133,15 @@ corTestReap()
     kill -9 "$pid" 2>/dev/null
   done
 
-  pkill -9 -f "valgrind.*coraine"      2>/dev/null
-  killall -9 coraine                   2>/dev/null
+  #
+  # A suite's brokers only, by their --port: the roles' 1026-1035 (corTestFunctions.sh) and the ports the
+  # tests that start one themselves give it (9, 4126, 9987). A bare `killall coraine` took every broker of
+  # the machine with it - a broker started by hand (a demo, a broker being tried), a parallel ETSI run (1036
+  # and up). perfRun's broker (1029) is in the range: a suite and a perf run cannot share the machine anyway.
+  #
+  local own='--port (10(2[6-9]|3[0-5])|9|4126|9987)( |$)'
+  pkill -9 -f "^([^ ]*/)?valgrind .*coraine.*$own" 2>/dev/null
+  pkill -9 -f "^([^ ]*/)?coraine .*$own" 2>/dev/null
   pkill -9 -f "(corTestClient|ftClient).*--port 77" 2>/dev/null   # the old name too: an orphan from before the rename
   return 0
 }
