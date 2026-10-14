@@ -40,9 +40,23 @@ COR_PORT=${COR_PORT:-1026}                               # default target port f
 # test fails on member order alone. That is not a hypothetical - it is 611 of 612
 # tests failing in CI, with no hint as to why, because the absence was silent.
 #
-CORJSON=${CORJSON:-$(which corJson 2>/dev/null || echo "")}
+# Where it is looked for: CORJSON, then PATH, then beside this file - corLibs' install-local puts the two in
+# one bin/ - then the corJson repository beside the one this file is in (corTest/ and corJson/ siblings, or
+# corLibs/bin/ two levels down from them: a CI checkout of the cor stack). A CI without corJson on PATH then
+# needs no CORJSON of its own.
+#
+if [ -z "${CORJSON:-}" ]; then
+  CORJSON=$(which corJson 2>/dev/null || echo "")
+  if [ -z "$CORJSON" ]; then
+    _ctfDir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+    for _c in "$_ctfDir/corJson" "$_ctfDir/../corJson/bin/corJson" "$_ctfDir/../../corJson/bin/corJson"; do
+      [ -x "$_c" ] && { CORJSON=$(cd "$(dirname "$_c")" && pwd)/corJson; break; }
+    done
+    unset _ctfDir _c
+  fi
+fi
 if [ -z "$CORJSON" ]; then
-  echo "corTest: FATAL - the 'corJson' tool is not on PATH and CORJSON is unset." >&2
+  echo "corTest: FATAL - the 'corJson' tool is not on PATH, not beside corTestFunctions.sh nor in a corJson/bin beside it, and CORJSON is unset." >&2
   echo "  corCurl sorts JSON response bodies with it, and every expect was captured sorted;" >&2
   echo "  without it every JSON test fails on member order. Build the Cor-Libs (corJson ships" >&2
   echo "  it in its bin/) or point CORJSON at the binary." >&2
