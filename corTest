@@ -869,7 +869,10 @@ function runTest()
     vMsg "  Regenerating EXPECT ..."
     regenTool="${COR_REGEN_TOOL:-${REPO_ROOT}/test/funcTests/tools/corRegenExpect}"
     [ -x "$regenTool" ] || regenTool="$SCRIPT_HOME/corRegenExpect"
-    "$regenTool" "$base"
+    if ! "$regenTool" "$base"; then
+      echo "  --regen: $regenTool failed - the --EXPECT-- block is not filled"
+      rc=15
+    fi
   else
     vMsg "  Comparing output ..."
     $SCRIPT_HOME/corDiff -r "$prefix.expect" -i "$prefix.out" > "$prefix.diff" 2>&1
@@ -1277,6 +1280,7 @@ for testFile in $testFiles; do
     local_prefix="$local_dir/$local_base"
 
     case $result in
+      5)  errorText="malformed test file: --EXPECT-- missing or empty (--regen: no --EXPECT-- marker)" ;;
       6)  errorText="malformed test file: no --TEARDOWN-- section" ;;
       7)  errorText="RUN: stderr not empty" ;;
       8)  errorText="RUN: non-zero exit" ;;
@@ -1287,6 +1291,7 @@ for testFile in $testFiles; do
       13) errorText=$(printf "valgrind: L=%d E=%d" "${vgLostBytes:-0}" "${vgErrCtx:-0}")
           errorText="$errorText (see ${COR_VALGRIND_LOG}.*.vg)" ;;
       14) errorText="valgrind: report INCOMPLETE — broker killed before finish, cannot trust" ;;
+      15) errorText="--regen failed: the --EXPECT-- block is not filled" ;;
       *)  errorText="error code $result" ;;
     esac
 
