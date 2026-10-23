@@ -949,7 +949,7 @@ do
   elif [ "$1" == "--skipNames" ];                   then skipNames="$2"; shift;
   elif [ "$1" == "--tags" ];        then tagsFilter="$2"; shift;
   elif [ "$1" == "--skip-tags" ];   then skipTagsFilter="$2"; shift;
-  elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export COR_VALGRIND=1;
+  elif [ "$1" == "-vt" ] || [ "$1" == "--vt" ]; then valgrind=on; export COR_VALGRIND=1; export COR_TREE_HEAP=malloc;   # valgrind sees a tree node's bounds only in malloc's (corTree/corTreeHeap.h)
   elif [ -f "$1" ] || [ -d "$1" ]; then fileArgs+=("$1");
   elif [ -f "test/funcTests/cases/$1" ]; then fileArgs+=("test/funcTests/cases/$1");
   elif [ -f "test/funcTests/cases/$1.test" ]; then fileArgs+=("test/funcTests/cases/$1.test");
