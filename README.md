@@ -244,11 +244,15 @@ corTest --regen cases/new.test       # fill an empty --EXPECT-- from captured ou
 | `--skip <spec>` | Run all BUT these indices, same grammar — **reported and counted as skipped** |
 | `--skipNames <list>` | Skip these test *names* — **reported**; defaults to `$CORTEST_SKIP` |
 | `--keep` | Keep per-test output files even on success |
+| `--keepLogs` | Keep the broker logs of a passing test too (`<test>.<role>.log` beside it), and nothing else |
 | `--dryrun` | List the selected tests without running them |
 | `--stopOnError` | Stop at the first failing test |
 | `--maxTries <N>` | Retry a failing test up to N times (default 1) |
 | `--regen` | (Re)generate `--EXPECT--` from captured output (needs an empty `--EXPECT--` marker) |
 | `--diffTool <path>` | Open an external diff tool on failure |
+| `-g` | Open the GUI diff on failure (`corDiffGui`) |
+| `-vt \| --vt` | Run the main broker under valgrind; a definite or indirect leak, or an error, fails the test. A test marked `SKIP_VALGRIND: on` is skipped. Sets `COR_VALGRIND=1` and `COR_TREE_HEAP=malloc` |
+| `-v` | Verbose: more messages, and `--dryrun` lists each test with its index and `--NAME--` |
 | `--noColor` | Disable colored output |
 | `-u` | Usage |
 
