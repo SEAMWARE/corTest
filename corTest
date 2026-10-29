@@ -69,19 +69,20 @@ repoRootOf()
 
 REPO_ROOT=$(repoRootOf "$(pwd)")
 
-if [ "$REPO_ROOT" == "" ]; then
-  # Not inside a test repo — try the repo that owns a path argument, and make
-  # every existing path argument absolute so it survives the cd below.
-  _corArgs=()
-  for _a in "$@"; do
-    if [ -e "$_a" ]; then
-      _a=$(cd "$(dirname "$_a")" >/dev/null 2>&1 && printf '%s/%s' "$(pwd)" "$(basename "$_a")")
-      [ "$REPO_ROOT" == "" ] && REPO_ROOT=$(repoRootOf "$(dirname "$_a")")
-    fi
-    _corArgs+=("$_a")
-  done
-  set -- "${_corArgs[@]}"
-fi
+#
+# Every existing path argument made absolute, so it survives the cd below - inside a test repo too
+# (`corTest cases/x.test` from test/funcTests was refused: 'cases/x.test' does not exist from the root).
+# Outside one, the repo that owns the first of them is the root.
+#
+_corArgs=()
+for _a in "$@"; do
+  if [ -e "$_a" ]; then
+    _a=$(cd "$(dirname "$_a")" >/dev/null 2>&1 && printf '%s/%s' "$(pwd)" "$(basename "$_a")")
+    [ "$REPO_ROOT" == "" ] && REPO_ROOT=$(repoRootOf "$(dirname "$_a")")
+  fi
+  _corArgs+=("$_a")
+done
+set -- "${_corArgs[@]}"
 
 if [ "$REPO_ROOT" == "" ]; then
   echo "corTest: no test repo here — run it inside one (a directory whose"
@@ -125,9 +126,11 @@ corTestReap()
 {
   # A stale ENGINE from a previous run. Never ourselves or our caller: this
   # script's own command line matches "corTest/corTest", so a bare pkill -f would
-  # shoot the run doing the reaping.
+  # shoot the run doing the reaping. And only a process that IS the script (its
+  # command, or bash's script): a shell whose command line merely holds the path
+  # (bash -c '.../corTest/corTest x | grep y') had its pipeline killed under it.
   local pid
-  for pid in $(pgrep -f "corTest/corTest" 2>/dev/null); do
+  for pid in $(pgrep -f "^([^ ]*/)?(bash )?[^ ]*corTest/corTest( |$)" 2>/dev/null); do
     [ "$pid" == "$$" ]     && continue
     [ "$pid" == "$PPID" ]  && continue
     kill -9 "$pid" 2>/dev/null
